@@ -178,7 +178,7 @@ func (r *ServiceBindingRepo) CreateServiceBinding(ctx context.Context, authInfo 
 		return ServiceBindingRecord{}, err
 	}
 
-	return cfServiceBindingToRecord(cfServiceBinding)
+	return serviceBindingToRecord(cfServiceBinding)
 }
 
 func (r *ServiceBindingRepo) DeleteServiceBinding(ctx context.Context, authInfo authorization.Info, guid string) error {
@@ -223,7 +223,7 @@ func (r *ServiceBindingRepo) GetServiceBinding(ctx context.Context, authInfo aut
 		return ServiceBindingRecord{}, apierrors.FromK8sError(err, ServiceBindingResourceType)
 	}
 
-	return cfServiceBindingToRecord(serviceBinding)
+	return serviceBindingToRecord(serviceBinding)
 }
 
 func (r *ServiceBindingRepo) GetServiceBindingDetails(ctx context.Context, authInfo authorization.Info, bindingGUID string) (ServiceBindingDetailsRecord, error) {
@@ -294,7 +294,7 @@ func (r *ServiceBindingRepo) UpdateServiceBinding(ctx context.Context, authInfo 
 		return ServiceBindingRecord{}, fmt.Errorf("failed to patch service binding metadata: %w", apierrors.FromK8sError(err, ServiceBindingResourceType))
 	}
 
-	return cfServiceBindingToRecord(serviceBinding)
+	return serviceBindingToRecord(serviceBinding)
 }
 
 // nolint:dupl
@@ -331,10 +331,10 @@ func (r *ServiceBindingRepo) ListServiceBindings(ctx context.Context, authInfo a
 	}
 
 	filteredServiceBindings := itx.FromSlice(serviceBindings).Filter(message.matches)
-	return toServiceBindingRecords(filteredServiceBindings)
+	return serviceBindingsToRecords(filteredServiceBindings)
 }
 
-func cfServiceBindingToRecord(binding *korifiv1alpha1.CFServiceBinding) (ServiceBindingRecord, error) {
+func serviceBindingToRecord(binding *korifiv1alpha1.CFServiceBinding) (ServiceBindingRecord, error) {
 	parameters := map[string]any{}
 	if binding.Spec.Parameters != nil {
 		err := json.Unmarshal(binding.Spec.Parameters.Raw, &parameters)
@@ -367,11 +367,11 @@ func cfServiceBindingToRecord(binding *korifiv1alpha1.CFServiceBinding) (Service
 	return record, nil
 }
 
-func toServiceBindingRecords(serviceBindings itx.Iterator[korifiv1alpha1.CFServiceBinding]) ([]ServiceBindingRecord, error) {
+func serviceBindingsToRecords(serviceBindings itx.Iterator[korifiv1alpha1.CFServiceBinding]) ([]ServiceBindingRecord, error) {
 	serviceInstanceRecords := []ServiceBindingRecord{}
 
 	for sb := range serviceBindings {
-		record, err := cfServiceBindingToRecord(&sb)
+		record, err := serviceBindingToRecord(&sb)
 		if err != nil {
 			return []ServiceBindingRecord{}, err
 		}
