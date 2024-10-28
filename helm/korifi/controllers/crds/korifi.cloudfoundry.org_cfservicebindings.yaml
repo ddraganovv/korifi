@@ -65,6 +65,11 @@ spec:
                 description: The mutable, user-friendly name of the service binding.
                   Unlike metadata.name, the user can change this field
                 type: string
+              parameters:
+                description: Additional Paramaters that are passed to the broker at
+                  creation
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
               service:
                 description: The Service this binding uses. When created by the korifi
                   API, this will refer to a CFServiceInstance

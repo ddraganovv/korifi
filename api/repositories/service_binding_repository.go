@@ -2,8 +2,8 @@ package repositories
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"slices"
 	"time"
 
 	"k8s.io/apimachinery/pkg/labels"
@@ -17,7 +17,6 @@ import (
 	"code.cloudfoundry.org/korifi/tools"
 	"code.cloudfoundry.org/korifi/tools/k8s"
 
-	"github.com/BooleanCat/go-functional/v2/it"
 	"github.com/BooleanCat/go-functional/v2/it/itx"
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
@@ -65,6 +64,7 @@ type ServiceBindingRecord struct {
 	CreatedAt           time.Time
 	UpdatedAt           *time.Time
 	LastOperation       ServiceBindingLastOperation
+	Parameters          map[string]any
 }
 
 func (r ServiceBindingRecord) Relationships() map[string]string {
@@ -82,11 +82,21 @@ type ServiceBindingLastOperation struct {
 	UpdatedAt   *time.Time
 }
 
+type Credentials map[string]any
+
+type ServiceBindingDetailsRecord struct {
+	Credentials    Credentials
+	SyslogDrainURL *string
+	VolumeMounts   []string
+}
+
 type CreateServiceBindingMessage struct {
 	Name                *string
+	Type                string
 	ServiceInstanceGUID string
 	AppGUID             string
 	SpaceGUID           string
+	Parameters          map[string]any
 }
 
 type DeleteServiceBindingMessage struct {
@@ -110,7 +120,10 @@ func (m CreateServiceBindingMessage) toCFServiceBinding() *korifiv1alpha1.CFServ
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      guid,
 			Namespace: m.SpaceGUID,
-			Labels:    map[string]string{LabelServiceBindingProvisionedService: "true"},
+			Labels: map[string]string{
+				LabelServiceBindingProvisionedService: "true",
+				korifiv1alpha1.CFBindingTypeLabelKey:  m.Type,
+			},
 		},
 		Spec: korifiv1alpha1.CFServiceBindingSpec{
 			DisplayName: m.Name,
@@ -165,7 +178,7 @@ func (r *ServiceBindingRepo) CreateServiceBinding(ctx context.Context, authInfo 
 		return ServiceBindingRecord{}, err
 	}
 
-	return cfServiceBindingToRecord(*cfServiceBinding), err
+	return cfServiceBindingToRecord(cfServiceBinding)
 }
 
 func (r *ServiceBindingRepo) DeleteServiceBinding(ctx context.Context, authInfo authorization.Info, guid string) error {
@@ -210,7 +223,45 @@ func (r *ServiceBindingRepo) GetServiceBinding(ctx context.Context, authInfo aut
 		return ServiceBindingRecord{}, apierrors.FromK8sError(err, ServiceBindingResourceType)
 	}
 
-	return cfServiceBindingToRecord(*serviceBinding), nil
+	return cfServiceBindingToRecord(serviceBinding)
+}
+
+func (r *ServiceBindingRepo) GetServiceBindingDetails(ctx context.Context, authInfo authorization.Info, bindingGUID string) (ServiceBindingDetailsRecord, error) {
+	userClient, err := r.userClientFactory.BuildClient(authInfo)
+	if err != nil {
+		return ServiceBindingDetailsRecord{}, fmt.Errorf("failed to build user client: %w", err)
+	}
+
+	namespace, err := r.namespaceRetriever.NamespaceFor(ctx, bindingGUID, ServiceBindingResourceType)
+	if err != nil {
+		return ServiceBindingDetailsRecord{}, err
+	}
+
+	serviceBinding := &korifiv1alpha1.CFServiceBinding{}
+	err = userClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: bindingGUID}, serviceBinding)
+	if err != nil {
+		return ServiceBindingDetailsRecord{}, apierrors.FromK8sError(err, ServiceBindingResourceType)
+	}
+
+	credentialsSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      serviceBinding.Status.Credentials.Name,
+		},
+	}
+
+	err = userClient.Get(ctx, client.ObjectKeyFromObject(credentialsSecret), credentialsSecret)
+	if err != nil {
+		return ServiceBindingDetailsRecord{}, apierrors.ForbiddenAsNotFound(apierrors.FromK8sError(err, ServiceBindingResourceType))
+	}
+
+	credentials := map[string]any{}
+	err = json.Unmarshal(credentialsSecret.Data[korifiv1alpha1.CredentialsSecretKey], &credentials)
+	if err != nil {
+		return ServiceBindingDetailsRecord{}, fmt.Errorf("failed to unmarshal service binding credentials: %w", err)
+	}
+
+	return ServiceBindingDetailsRecord{Credentials: credentials}, nil
 }
 
 func (r *ServiceBindingRepo) UpdateServiceBinding(ctx context.Context, authInfo authorization.Info, updateMsg UpdateServiceBindingMessage) (ServiceBindingRecord, error) {
@@ -243,29 +294,7 @@ func (r *ServiceBindingRepo) UpdateServiceBinding(ctx context.Context, authInfo 
 		return ServiceBindingRecord{}, fmt.Errorf("failed to patch service binding metadata: %w", apierrors.FromK8sError(err, ServiceBindingResourceType))
 	}
 
-	return cfServiceBindingToRecord(*serviceBinding), nil
-}
-
-func cfServiceBindingToRecord(binding korifiv1alpha1.CFServiceBinding) ServiceBindingRecord {
-	return ServiceBindingRecord{
-		GUID:                binding.Name,
-		Type:                ServiceBindingTypeApp,
-		Name:                binding.Spec.DisplayName,
-		AppGUID:             binding.Spec.AppRef.Name,
-		ServiceInstanceGUID: binding.Spec.Service.Name,
-		SpaceGUID:           binding.Namespace,
-		Labels:              binding.Labels,
-		Annotations:         binding.Annotations,
-		CreatedAt:           binding.CreationTimestamp.Time,
-		UpdatedAt:           getLastUpdatedTime(&binding),
-		LastOperation: ServiceBindingLastOperation{
-			Type:        "create",
-			State:       "succeeded",
-			Description: nil,
-			CreatedAt:   binding.CreationTimestamp.Time,
-			UpdatedAt:   getLastUpdatedTime(&binding),
-		},
-	}
+	return cfServiceBindingToRecord(serviceBinding)
 }
 
 // nolint:dupl
@@ -302,5 +331,51 @@ func (r *ServiceBindingRepo) ListServiceBindings(ctx context.Context, authInfo a
 	}
 
 	filteredServiceBindings := itx.FromSlice(serviceBindings).Filter(message.matches)
-	return slices.Collect(it.Map(filteredServiceBindings, cfServiceBindingToRecord)), nil
+	return toServiceBindingRecords(filteredServiceBindings)
+}
+
+func cfServiceBindingToRecord(binding *korifiv1alpha1.CFServiceBinding) (ServiceBindingRecord, error) {
+	parameters := map[string]any{}
+	if binding.Spec.Parameters != nil {
+		err := json.Unmarshal(binding.Spec.Parameters.Raw, &parameters)
+		if err != nil {
+			return ServiceBindingRecord{}, fmt.Errorf("failed to unmarshal binding parameters: %w", err)
+		}
+	}
+
+	record := ServiceBindingRecord{
+		GUID:                binding.Name,
+		Type:                binding.Labels[korifiv1alpha1.CFBindingTypeLabelKey],
+		Name:                binding.Spec.DisplayName,
+		AppGUID:             binding.Spec.AppRef.Name,
+		ServiceInstanceGUID: binding.Spec.Service.Name,
+		SpaceGUID:           binding.Namespace,
+		Labels:              binding.Labels,
+		Annotations:         binding.Annotations,
+		CreatedAt:           binding.CreationTimestamp.Time,
+		UpdatedAt:           getLastUpdatedTime(binding),
+		LastOperation: ServiceBindingLastOperation{
+			Type:        "create",
+			State:       "succeeded",
+			Description: nil,
+			CreatedAt:   binding.CreationTimestamp.Time,
+			UpdatedAt:   getLastUpdatedTime(binding),
+		},
+		Parameters: parameters,
+	}
+
+	return record, nil
+}
+
+func toServiceBindingRecords(serviceBindings itx.Iterator[korifiv1alpha1.CFServiceBinding]) ([]ServiceBindingRecord, error) {
+	serviceInstanceRecords := []ServiceBindingRecord{}
+
+	for sb := range serviceBindings {
+		record, err := cfServiceBindingToRecord(&sb)
+		if err != nil {
+			return []ServiceBindingRecord{}, err
+		}
+		serviceInstanceRecords = append(serviceInstanceRecords, record)
+	}
+	return serviceInstanceRecords, nil
 }

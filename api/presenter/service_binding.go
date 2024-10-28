@@ -34,6 +34,16 @@ type ServiceBindingLastOperationResponse struct {
 	UpdatedAt   string  `json:"updated_at"`
 }
 
+type Credentials map[string]any
+
+type ServiceBindingDetailsResponse struct {
+	Credentials    map[string]any `json:"credentials"`
+	SyslogDrainURL *string        `json:"syslog_drain_url,omitempty"`
+	VolumeMounts   []string       `json:"volume_mounts,omitempty"`
+}
+
+type ServiceBindingParametersResponse map[string]any
+
 type ServiceBindingLinks struct {
 	App             Link `json:"app"`
 	ServiceInstance Link `json:"service_instance"`
@@ -86,4 +96,16 @@ func ForServiceBindingList(serviceBindingRecords []repositories.ServiceBindingRe
 	}))
 
 	return ForList(ForServiceBinding, serviceBindingRecords, baseURL, requestURL, includedApps...)
+}
+
+func ForServiceBindingDetails(serviceBindingDetailsRecord repositories.ServiceBindingDetailsRecord) ServiceBindingDetailsResponse {
+	return ServiceBindingDetailsResponse{
+		Credentials:    serviceBindingDetailsRecord.Credentials,
+		SyslogDrainURL: serviceBindingDetailsRecord.SyslogDrainURL,
+		VolumeMounts:   serviceBindingDetailsRecord.VolumeMounts,
+	}
+}
+
+func ForServiceBindingParameters(serviceBindingRecord repositories.ServiceBindingRecord) ServiceBindingParametersResponse {
+	return serviceBindingRecord.Parameters
 }

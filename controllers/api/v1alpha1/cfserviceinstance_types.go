@@ -25,8 +25,9 @@ import (
 )
 
 const (
-	UserProvidedType = "user-provided"
-	ManagedType      = "managed"
+	UserProvidedType     = "user-provided"
+	ManagedType          = "managed"
+	CredentialsSecretKey = "credentials"
 
 	CFManagedServiceInstanceFinalizerName = "managed.cfServiceInstance.korifi.cloudfoundry.org"
 

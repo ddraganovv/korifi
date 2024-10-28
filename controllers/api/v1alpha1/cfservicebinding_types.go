@@ -21,6 +21,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
 // CFServiceBindingSpec defines the desired state of CFServiceBinding
@@ -33,6 +34,9 @@ type CFServiceBindingSpec struct {
 
 	// A reference to the CFApp that owns this service binding. The CFApp must be in the same namespace
 	AppRef v1.LocalObjectReference `json:"appRef"`
+
+	// Additional Paramaters that are passed to the broker at creation
+	Parameters *runtime.RawExtension `json:"parameters,omitempty"`
 }
 
 // CFServiceBindingStatus defines the observed state of CFServiceBinding

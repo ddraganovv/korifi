@@ -16,8 +16,10 @@ import (
 )
 
 const (
-	ServiceBindingsPath = "/v3/service_credential_bindings"
-	ServiceBindingPath  = "/v3/service_credential_bindings/{guid}"
+	ServiceBindingsPath          = "/v3/service_credential_bindings"
+	ServiceBindingPath           = "/v3/service_credential_bindings/{guid}"
+	ServiceBindingParametersPath = ServiceBindingPath + "/parameters"
+	ServiceBindingDetailsPath    = ServiceBindingPath + "/details"
 )
 
 type ServiceBinding struct {
@@ -33,6 +35,7 @@ type CFServiceBindingRepository interface {
 	CreateServiceBinding(context.Context, authorization.Info, repositories.CreateServiceBindingMessage) (repositories.ServiceBindingRecord, error)
 	DeleteServiceBinding(context.Context, authorization.Info, string) error
 	ListServiceBindings(context.Context, authorization.Info, repositories.ListServiceBindingsMessage) ([]repositories.ServiceBindingRecord, error)
+	GetServiceBindingDetails(context.Context, authorization.Info, string) (repositories.ServiceBindingDetailsRecord, error)
 	GetServiceBinding(context.Context, authorization.Info, string) (repositories.ServiceBindingRecord, error)
 	UpdateServiceBinding(context.Context, authorization.Info, repositories.UpdateServiceBindingMessage) (repositories.ServiceBindingRecord, error)
 }
@@ -165,6 +168,32 @@ func (h *ServiceBinding) get(r *http.Request) (*routing.Response, error) {
 	return routing.NewResponse(http.StatusOK).WithBody(presenter.ForServiceBinding(serviceBinding, h.serverURL)), nil
 }
 
+func (h *ServiceBinding) getDetails(r *http.Request) (*routing.Response, error) {
+	authInfo, _ := authorization.InfoFromContext(r.Context())
+	logger := logr.FromContextOrDiscard(r.Context()).WithName("handlers.service-binding.get-details")
+
+	serviceBindingGUID := routing.URLParam(r, "guid")
+
+	bindingDetails, err := h.serviceBindingRepo.GetServiceBindingDetails(r.Context(), authInfo, serviceBindingGUID)
+	if err != nil {
+		return nil, apierrors.LogAndReturn(logger, apierrors.ForbiddenAsNotFound(err), "Error getting service binding details in repository")
+	}
+	return routing.NewResponse(http.StatusOK).WithBody(presenter.ForServiceBindingDetails(bindingDetails)), nil
+}
+
+func (h *ServiceBinding) getParameters(r *http.Request) (*routing.Response, error) {
+	authInfo, _ := authorization.InfoFromContext(r.Context())
+	logger := logr.FromContextOrDiscard(r.Context()).WithName("handlers.service-binding.get-parameters")
+
+	serviceBindingGUID := routing.URLParam(r, "guid")
+
+	serviceBinding, err := h.serviceBindingRepo.GetServiceBinding(r.Context(), authInfo, serviceBindingGUID)
+	if err != nil {
+		return nil, apierrors.LogAndReturn(logger, apierrors.ForbiddenAsNotFound(err), "Error getting service binding in repository")
+	}
+	return routing.NewResponse(http.StatusOK).WithBody(presenter.ForServiceBindingParameters(serviceBinding)), nil
+}
+
 func (h *ServiceBinding) UnauthenticatedRoutes() []routing.Route {
 	return nil
 }
@@ -176,5 +205,7 @@ func (h *ServiceBinding) AuthenticatedRoutes() []routing.Route {
 		{Method: "DELETE", Pattern: ServiceBindingPath, Handler: h.delete},
 		{Method: "PATCH", Pattern: ServiceBindingPath, Handler: h.update},
 		{Method: "GET", Pattern: ServiceBindingPath, Handler: h.get},
+		{Method: "GET", Pattern: ServiceBindingParametersPath, Handler: h.getParameters},
+		{Method: "GET", Pattern: ServiceBindingDetailsPath, Handler: h.getDetails},
 	}
 }

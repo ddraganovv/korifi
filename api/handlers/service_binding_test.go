@@ -33,6 +33,19 @@ var _ = Describe("ServiceBinding", func() {
 		serviceBindingRepo = new(fake.CFServiceBindingRepository)
 		serviceBindingRepo.GetServiceBindingReturns(repositories.ServiceBindingRecord{
 			GUID: "service-binding-guid",
+			Parameters: map[string]any{
+				"param1": "value1",
+				"param2": "value2",
+			},
+		}, nil)
+
+		sysLogDrainURL := "http://syslog.example.com/drain"
+		serviceBindingRepo.GetServiceBindingDetailsReturns(repositories.ServiceBindingDetailsRecord{
+			Credentials: repositories.Credentials{
+				"connection": "mydb://user@password:example.com",
+			},
+			SyslogDrainURL: &sysLogDrainURL,
+			VolumeMounts:   []string{"mount1", "mount2"},
 		}, nil)
 
 		appRepo = new(fake.CFAppRepository)
@@ -217,7 +230,7 @@ var _ = Describe("ServiceBinding", func() {
 			)))
 		})
 
-		When("the service bindding repo returns an error", func() {
+		When("the service binding repo returns an error", func() {
 			BeforeEach(func() {
 				serviceBindingRepo.GetServiceBindingReturns(repositories.ServiceBindingRecord{}, errors.New("get-service-binding-error"))
 			})
@@ -234,6 +247,83 @@ var _ = Describe("ServiceBinding", func() {
 
 			It("returns 404 NotFound", func() {
 				expectNotFoundError("CFServiceBinding")
+			})
+		})
+	})
+
+	Describe("GET /v3/service_credential_bindings/{guid}/parameters", func() {
+		BeforeEach(func() {
+			requestMethod = http.MethodGet
+			requestPath = "/v3/service_credential_bindings/service-binding-guid/parameters"
+			requestBody = ""
+		})
+
+		It("returns the service binding parameters", func() {
+			Expect(rr).To(HaveHTTPStatus(http.StatusOK))
+			Expect(rr).To(HaveHTTPHeaderWithValue("Content-Type", "application/json"))
+			Expect(rr).To(HaveHTTPBody(SatisfyAll(
+				MatchJSONPath("$.param1", "value1"),
+				MatchJSONPath("$.param2", "value2"),
+			)))
+		})
+
+		When("the service binding repo returns an error", func() {
+			BeforeEach(func() {
+				serviceBindingRepo.GetServiceBindingReturns(repositories.ServiceBindingRecord{}, errors.New("get-service-binding-error"))
+			})
+
+			It("returns an error", func() {
+				expectUnknownError()
+			})
+		})
+
+		When("the user is not authorized", func() {
+			BeforeEach(func() {
+				serviceBindingRepo.GetServiceBindingReturns(repositories.ServiceBindingRecord{}, apierrors.NewForbiddenError(nil, "CFServiceBinding"))
+			})
+
+			It("returns 404 NotFound", func() {
+				expectNotFoundError("CFServiceBinding")
+			})
+		})
+	})
+
+	Describe("GET /v3/service_credential_bindings/{guid}/details", func() {
+		BeforeEach(func() {
+			requestMethod = http.MethodGet
+			requestPath = "/v3/service_credential_bindings/service-binding-guid/details"
+			requestBody = ""
+		})
+
+		It("returns the service binding details", func() {
+			Expect(rr).To(HaveHTTPStatus(http.StatusOK))
+			Expect(rr).To(HaveHTTPHeaderWithValue("Content-Type", "application/json"))
+			Expect(rr).To(HaveHTTPBody(SatisfyAll(
+				MatchJSONPath("$.credentials.connection", "mydb://user@password:example.com"),
+				MatchJSONPath("$.syslog_drain_url", "http://syslog.example.com/drain"),
+				MatchJSONPath("$.volume_mounts[0]", "mount1"),
+				MatchJSONPath("$.volume_mounts[1]", "mount2"),
+			)))
+			Expect(serviceBindingRepo.GetServiceBindingDetailsCallCount()).To(Equal(1))
+		})
+
+		When("the service binding repo returns an error", func() {
+			BeforeEach(func() {
+				serviceBindingRepo.GetServiceBindingDetailsReturns(repositories.ServiceBindingDetailsRecord{}, errors.New("get-service-binding-details-error"))
+			})
+
+			It("returns an error", func() {
+				expectUnknownError()
+			})
+		})
+
+		When("getting the service binding is forbidden", func() {
+			BeforeEach(func() {
+				serviceBindingRepo.GetServiceBindingDetailsReturns(repositories.ServiceBindingDetailsRecord{}, apierrors.NewForbiddenError(nil, repositories.ServiceBindingResourceType))
+			})
+
+			It("returns 404 NotFound when binding not found", func() {
+				expectNotFoundError(repositories.ServiceBindingResourceType)
 			})
 		})
 	})
@@ -317,7 +407,7 @@ var _ = Describe("ServiceBinding", func() {
 
 	Describe("DELETE /v3/service_credential_bindings/:guid", func() {
 		BeforeEach(func() {
-			requestMethod = "DELETE"
+			requestMethod = http.MethodDelete
 			requestPath = "/v3/service_credential_bindings/service-binding-guid"
 		})
 
@@ -333,7 +423,7 @@ var _ = Describe("ServiceBinding", func() {
 
 	Describe("PATCH /v3/service_credential_bindings/:guid", func() {
 		BeforeEach(func() {
-			requestMethod = "PATCH"
+			requestMethod = http.MethodPatch
 			requestPath = "/v3/service_credential_bindings/service-binding-guid"
 			requestBody = "the-json-body"
 
