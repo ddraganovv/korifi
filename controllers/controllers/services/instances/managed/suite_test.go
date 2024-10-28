@@ -24,7 +24,7 @@ import (
 
 	korifiv1alpha1 "code.cloudfoundry.org/korifi/controllers/api/v1alpha1"
 	"code.cloudfoundry.org/korifi/controllers/controllers/services/instances/managed"
-	"code.cloudfoundry.org/korifi/controllers/controllers/services/instances/managed/fake"
+	"code.cloudfoundry.org/korifi/controllers/controllers/services/osbapi/fake"
 	"code.cloudfoundry.org/korifi/controllers/controllers/shared"
 	"code.cloudfoundry.org/korifi/tests/helpers"
 
@@ -43,20 +43,21 @@ import (
 )
 
 var (
-	ctx             context.Context
-	stopManager     context.CancelFunc
-	stopClientCache context.CancelFunc
-	testEnv         *envtest.Environment
-	adminClient     client.Client
-	k8sManager      manager.Manager
-	rootNamespace   string
-
+	ctx                 context.Context
+	stopManager         context.CancelFunc
+	stopClientCache     context.CancelFunc
+	testEnv             *envtest.Environment
+	adminClient         client.Client
+	k8sManager          manager.Manager
+	rootNamespace       string
 	brokerClientFactory *fake.BrokerClientFactory
 )
 
 func TestAPIs(t *testing.T) {
 	SetDefaultEventuallyTimeout(30 * time.Second)
 	SetDefaultEventuallyPollingInterval(250 * time.Millisecond)
+	SetDefaultConsistentlyDuration(5 * time.Second)
+	SetDefaultConsistentlyPollingInterval(250 * time.Millisecond)
 
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Services Instance Controller Integration Suite")

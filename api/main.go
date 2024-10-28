@@ -150,6 +150,7 @@ func main() {
 		userClientFactory,
 		nsPermissions,
 		conditions.NewConditionAwaiter[*korifiv1alpha1.CFApp, korifiv1alpha1.CFApp, korifiv1alpha1.CFAppList](conditionTimeout),
+		repositories.NewAppSorter(),
 	)
 	dropletRepo := repositories.NewDropletRepo(
 		userClientFactory,
@@ -209,6 +210,7 @@ func main() {
 	buildpackRepo := repositories.NewBuildpackRepository(cfg.BuilderName,
 		userClientFactory,
 		cfg.RootNamespace,
+		repositories.NewBuildpackSorter(),
 	)
 	roleRepo := repositories.NewRoleRepo(
 		userClientFactory,
@@ -218,6 +220,7 @@ func main() {
 		cfg.RootNamespace,
 		cfg.RoleMappings,
 		namespaceRetriever,
+		repositories.NewRoleSorter(),
 	)
 	imageClient := image.NewClient(privilegedK8sClient)
 	imageRepo := repositories.NewImageRepository(
@@ -369,6 +372,7 @@ func main() {
 				handlers.ServiceBrokerCreateJobType:          serviceBrokerRepo,
 				handlers.ServiceBrokerUpdateJobType:          serviceBrokerRepo,
 				handlers.ManagedServiceInstanceCreateJobType: serviceInstanceRepo,
+				handlers.ManagedServiceBindingCreateJobType:  serviceBindingRepo,
 			},
 			500*time.Millisecond,
 		),

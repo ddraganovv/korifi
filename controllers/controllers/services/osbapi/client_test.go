@@ -107,7 +107,7 @@ var _ = Describe("OSBAPI Client", func() {
 
 		When("getting the catalog fails", func() {
 			BeforeEach(func() {
-				brokerServer = broker.NewServer().WithHandler("/v2/catalog", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				brokerServer = brokerServer.WithHandler("/v2/catalog", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.WriteHeader(http.StatusTeapot)
 				}))
 			})
@@ -119,7 +119,7 @@ var _ = Describe("OSBAPI Client", func() {
 
 		When("the catalog response cannot be unmarshalled", func() {
 			BeforeEach(func() {
-				brokerServer = broker.NewServer().WithHandler("/v2/catalog", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				brokerServer = brokerServer.WithHandler("/v2/catalog", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					_, _ = w.Write([]byte("hello"))
 				}))
 			})
@@ -138,11 +138,9 @@ var _ = Describe("OSBAPI Client", func() {
 			)
 
 			BeforeEach(func() {
-				brokerServer = broker.NewServer().WithResponse(
+				brokerServer = brokerServer.WithResponse(
 					"/v2/service_instances/{id}",
-					map[string]any{
-						"operation": "provision_op1",
-					},
+					nil,
 					http.StatusCreated,
 				)
 			})
@@ -199,14 +197,13 @@ var _ = Describe("OSBAPI Client", func() {
 			It("provisions the service synchronously", func() {
 				Expect(provisionErr).NotTo(HaveOccurred())
 				Expect(provisionResp).To(Equal(osbapi.ServiceInstanceOperationResponse{
-					Operation: "provision_op1",
-					Complete:  true,
+					Complete: true,
 				}))
 			})
 
 			When("the broker accepts the provision request", func() {
 				BeforeEach(func() {
-					brokerServer = broker.NewServer().WithResponse(
+					brokerServer = brokerServer.WithResponse(
 						"/v2/service_instances/{id}",
 						map[string]any{
 							"operation": "provision_op1",
@@ -226,7 +223,7 @@ var _ = Describe("OSBAPI Client", func() {
 
 			When("the provision request fails", func() {
 				BeforeEach(func() {
-					brokerServer = broker.NewServer().WithHandler("/v2/service_instances/{id}", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					brokerServer = brokerServer.WithHandler("/v2/service_instances/{id}", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 						w.WriteHeader(http.StatusTeapot)
 					}))
 				})
@@ -301,7 +298,7 @@ var _ = Describe("OSBAPI Client", func() {
 
 			When("the deprovision request fails", func() {
 				BeforeEach(func() {
-					brokerServer = broker.NewServer().WithHandler("/v2/service_instances/{id}", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					brokerServer = brokerServer.WithHandler("/v2/service_instances/{id}", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 						w.WriteHeader(http.StatusTeapot)
 					}))
 				})
@@ -312,10 +309,11 @@ var _ = Describe("OSBAPI Client", func() {
 			})
 		})
 
-		Describe("GetLastOperation", func() {
+		Describe("GetServiceInstanceLastOperation", func() {
 			var (
-				lastOpResp osbapi.LastOperationResponse
-				lastOpErr  error
+				lastOpResp           osbapi.LastOperationResponse
+				lastOpErr            error
+				lastOperationRequest osbapi.GetServiceInstanceLastOperationRequest
 			)
 
 			BeforeEach(func() {
@@ -327,12 +325,243 @@ var _ = Describe("OSBAPI Client", func() {
 					},
 					http.StatusOK,
 				)
+
+				lastOperationRequest = osbapi.GetServiceInstanceLastOperationRequest{
+					InstanceID: "my-service-instance",
+					GetLastOperationRequestParameters: osbapi.GetLastOperationRequestParameters{
+						ServiceId: "service-guid",
+						PlanID:    "plan-guid",
+						Operation: "op-guid",
+					},
+				}
 			})
 
 			JustBeforeEach(func() {
-				lastOpResp, lastOpErr = brokerClient.GetServiceInstanceLastOperation(ctx, osbapi.GetLastOperationPayload{
-					ID: "my-service-instance",
-					GetLastOperationRequest: osbapi.GetLastOperationRequest{
+				lastOpResp, lastOpErr = brokerClient.GetServiceInstanceLastOperation(ctx, lastOperationRequest)
+			})
+
+			It("gets the last operation", func() {
+				Expect(lastOpErr).NotTo(HaveOccurred())
+				Expect(lastOpResp).To(Equal(osbapi.LastOperationResponse{
+					State:       "in-progress",
+					Description: "provisioning",
+				}))
+			})
+
+			It("sends correct request to broker", func() {
+				Expect(lastOpErr).NotTo(HaveOccurred())
+				requests := brokerServer.ServedRequests()
+
+				Expect(requests).To(HaveLen(1))
+
+				Expect(requests[0].Method).To(Equal(http.MethodGet))
+				Expect(requests[0].URL.Path).To(Equal("/v2/service_instances/my-service-instance/last_operation"))
+				Expect(requests[0].URL.Query()).To(BeEquivalentTo(map[string][]string{
+					"service_id": {"service-guid"},
+					"plan_id":    {"plan-guid"},
+					"operation":  {"op-guid"},
+				}))
+
+				requestBytes, err := io.ReadAll(requests[0].Body)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(requestBytes).To(BeEmpty())
+			})
+
+			When("request parameters are not specified", func() {
+				BeforeEach(func() {
+					lastOperationRequest = osbapi.GetServiceInstanceLastOperationRequest{
+						InstanceID: "my-service-instance",
+					}
+				})
+
+				It("does not specify http request query parameters", func() {
+					Expect(lastOpErr).NotTo(HaveOccurred())
+					requests := brokerServer.ServedRequests()
+
+					Expect(requests).To(HaveLen(1))
+					Expect(requests[0].URL.Query()).To(BeEmpty())
+				})
+			})
+
+			When("getting the last operation request fails", func() {
+				BeforeEach(func() {
+					brokerServer = brokerServer.WithHandler("/v2/service_instances/{id}/last_operation", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+						w.WriteHeader(http.StatusTeapot)
+					}))
+				})
+
+				It("returns an error", func() {
+					Expect(lastOpErr).To(MatchError(ContainSubstring("last operation request failed")))
+				})
+			})
+
+			When("getting the last operation request fails with 410 Gone", func() {
+				BeforeEach(func() {
+					brokerServer = brokerServer.WithHandler("/v2/service_instances/{id}/last_operation", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+						w.WriteHeader(http.StatusGone)
+					}))
+				})
+
+				It("returns a gone error", func() {
+					Expect(lastOpErr).To(BeAssignableToTypeOf(osbapi.GoneError{}))
+				})
+			})
+		})
+	})
+
+	Describe("Bindings", func() {
+		Describe("Bind", func() {
+			var (
+				bindResp osbapi.BindResponse
+				bindErr  error
+			)
+
+			BeforeEach(func() {
+				brokerServer.WithResponse(
+					"/v2/service_instances/{instance_id}/service_bindings/{binding_id}",
+					map[string]any{
+						"credentials": map[string]string{
+							"foo": "bar",
+						},
+					},
+					http.StatusCreated,
+				)
+			})
+
+			JustBeforeEach(func() {
+				bindResp, bindErr = brokerClient.Bind(ctx, osbapi.BindPayload{
+					InstanceID: "instance-id",
+					BindingID:  "binding-id",
+					BindRequest: osbapi.BindRequest{
+						ServiceId: "service-guid",
+						PlanID:    "plan-guid",
+						AppGUID:   "app-guid",
+						BindResource: osbapi.BindResource{
+							AppGUID: "app-guid",
+						},
+						Parameters: map[string]any{
+							"foo": "bar",
+						},
+					},
+				})
+			})
+
+			It("sends async bind request to broker", func() {
+				Expect(bindErr).NotTo(HaveOccurred())
+				requests := brokerServer.ServedRequests()
+
+				Expect(requests).To(HaveLen(1))
+
+				Expect(requests[0].Method).To(Equal(http.MethodPut))
+				Expect(requests[0].URL.Path).To(Equal("/v2/service_instances/instance-id/service_bindings/binding-id"))
+
+				Expect(requests[0].URL.Query().Get("accepts_incomplete")).To(Equal("true"))
+			})
+
+			It("sends correct request to broker", func() {
+				Expect(bindErr).NotTo(HaveOccurred())
+				requests := brokerServer.ServedRequests()
+
+				Expect(requests).To(HaveLen(1))
+
+				Expect(requests[0].Method).To(Equal(http.MethodPut))
+				Expect(requests[0].URL.Path).To(Equal("/v2/service_instances/instance-id/service_bindings/binding-id"))
+
+				requestBytes, err := io.ReadAll(requests[0].Body)
+				Expect(err).NotTo(HaveOccurred())
+				requestBody := map[string]any{}
+				Expect(json.Unmarshal(requestBytes, &requestBody)).To(Succeed())
+
+				Expect(requestBody).To(MatchAllKeys(Keys{
+					"service_id": Equal("service-guid"),
+					"plan_id":    Equal("plan-guid"),
+					"app_guid":   Equal("app-guid"),
+					"bind_resource": MatchAllKeys(Keys{
+						"app_guid": Equal("app-guid"),
+					}),
+					"parameters": MatchAllKeys(Keys{
+						"foo": Equal("bar"),
+					}),
+				}))
+			})
+
+			It("binds the service", func() {
+				Expect(bindErr).NotTo(HaveOccurred())
+				Expect(bindResp).To(Equal(osbapi.BindResponse{
+					Credentials: map[string]any{
+						"foo": "bar",
+					},
+					Complete: true,
+				}))
+			})
+
+			When("bind is asynchronous", func() {
+				BeforeEach(func() {
+					brokerServer.WithResponse(
+						"/v2/service_instances/{instance_id}/service_bindings/{binding_id}",
+						map[string]any{
+							"operation": "bind_op1",
+						},
+						http.StatusAccepted,
+					)
+				})
+
+				It("binds the service asynchronously", func() {
+					Expect(bindErr).NotTo(HaveOccurred())
+					Expect(bindResp).To(Equal(osbapi.BindResponse{
+						Operation: "bind_op1",
+						Complete:  false,
+					}))
+				})
+			})
+
+			When("binding request fails", func() {
+				BeforeEach(func() {
+					brokerServer = brokerServer.WithHandler("/v2/service_instances/{instance_id}/service_bindings/{binding_id}", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+						w.WriteHeader(http.StatusTeapot)
+					}))
+				})
+
+				It("returns an error", func() {
+					Expect(bindErr).To(MatchError(ContainSubstring("binding request failed")))
+				})
+			})
+
+			When("binding request fails with 409 Confilct", func() {
+				BeforeEach(func() {
+					brokerServer = brokerServer.WithHandler("/v2/service_instances/{instance_id}/service_bindings/{binding_id}", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+						w.WriteHeader(http.StatusConflict)
+					}))
+				})
+
+				It("returns a confilct error", func() {
+					Expect(bindErr).To(BeAssignableToTypeOf(osbapi.ConflictError{}))
+				})
+			})
+		})
+
+		Describe("GetServiceBindingLastOperation", func() {
+			var (
+				lastOpResp osbapi.LastOperationResponse
+				lastOpErr  error
+			)
+
+			BeforeEach(func() {
+				brokerServer.WithResponse(
+					"/v2/service_instances/{instance_id}/service_bindings/{binding_id}/last_operation",
+					map[string]any{
+						"state":       "in-progress",
+						"description": "provisioning",
+					},
+					http.StatusOK,
+				)
+			})
+
+			JustBeforeEach(func() {
+				lastOpResp, lastOpErr = brokerClient.GetServiceBindingLastOperation(ctx, osbapi.GetServiceBindingLastOperationRequest{
+					InstanceID: "my-service-instance",
+					BindingID:  "my-binding-id",
+					GetLastOperationRequestParameters: osbapi.GetLastOperationRequestParameters{
 						ServiceId: "service-guid",
 						PlanID:    "plan-guid",
 						Operation: "op-guid",
@@ -355,41 +584,108 @@ var _ = Describe("OSBAPI Client", func() {
 				Expect(requests).To(HaveLen(1))
 
 				Expect(requests[0].Method).To(Equal(http.MethodGet))
-				Expect(requests[0].URL.Path).To(Equal("/v2/service_instances/my-service-instance/last_operation"))
+				Expect(requests[0].URL.Path).To(Equal("/v2/service_instances/my-service-instance/service_bindings/my-binding-id/last_operation"))
 
 				requestBytes, err := io.ReadAll(requests[0].Body)
 				Expect(err).NotTo(HaveOccurred())
-				requestBody := map[string]any{}
-				Expect(json.Unmarshal(requestBytes, &requestBody)).To(Succeed())
-
-				Expect(requestBody).To(MatchAllKeys(Keys{
-					"service_id": Equal("service-guid"),
-					"plan_id":    Equal("plan-guid"),
-					"operation":  Equal("op-guid"),
-				}))
+				Expect(requestBytes).To(BeEmpty())
 			})
 
 			When("getting the last operation request fails", func() {
 				BeforeEach(func() {
-					brokerServer = broker.NewServer().WithHandler("/v2/service_instances/{id}/last_operation", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-						w.WriteHeader(http.StatusTeapot)
-					}))
+					brokerServer = brokerServer.WithHandler(
+						"/v2/service_instances/{instance_id}/service_bindings/{binding_id}/last_operation",
+						http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+							w.WriteHeader(http.StatusTeapot)
+						}))
 				})
 
 				It("returns an error", func() {
-					Expect(lastOpErr).To(MatchError(ContainSubstring("getting last operation request failed")))
+					Expect(lastOpErr).To(MatchError(ContainSubstring("last operation request failed")))
 				})
 			})
 
 			When("getting the last operation request fails with 410 Gone", func() {
 				BeforeEach(func() {
-					brokerServer = broker.NewServer().WithHandler("/v2/service_instances/{id}/last_operation", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-						w.WriteHeader(http.StatusGone)
-					}))
+					brokerServer = brokerServer.WithHandler(
+						"/v2/service_instances/{instance_id}/service_bindings/{binding_id}/last_operation",
+						http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+							w.WriteHeader(http.StatusGone)
+						}))
 				})
 
 				It("returns a gone error", func() {
 					Expect(lastOpErr).To(BeAssignableToTypeOf(osbapi.GoneError{}))
+				})
+			})
+		})
+
+		Describe("GetServiceBinding", func() {
+			var (
+				getBindingResponse osbapi.GetBindingResponse
+				getBindingErr      error
+			)
+
+			BeforeEach(func() {
+				brokerServer.WithResponse(
+					"/v2/service_instances/{instance_id}/service_bindings/{binding_id}",
+					map[string]any{
+						"credentials": map[string]any{
+							"credentialKey": "credentialValue",
+						},
+					},
+					http.StatusOK,
+				)
+			})
+
+			JustBeforeEach(func() {
+				getBindingResponse, getBindingErr = brokerClient.GetServiceBinding(ctx, osbapi.GetServiceBindingRequest{
+					InstanceID: "my-service-instance",
+					BindingID:  "my-binding-id",
+					ServiceId:  "service-guid",
+					PlanID:     "plan-guid",
+				})
+			})
+
+			It("gets the binding", func() {
+				Expect(getBindingErr).NotTo(HaveOccurred())
+				Expect(getBindingResponse).To(Equal(osbapi.GetBindingResponse{
+					Credentials: map[string]any{
+						"credentialKey": "credentialValue",
+					},
+				}))
+			})
+
+			It("sends correct request to broker", func() {
+				Expect(getBindingErr).NotTo(HaveOccurred())
+				requests := brokerServer.ServedRequests()
+
+				Expect(requests).To(HaveLen(1))
+
+				Expect(requests[0].Method).To(Equal(http.MethodGet))
+				Expect(requests[0].URL.Path).To(Equal("/v2/service_instances/my-service-instance/service_bindings/my-binding-id"))
+
+				Expect(requests[0].URL.Query()).To(BeEquivalentTo(map[string][]string{
+					"service_id": {"service-guid"},
+					"plan_id":    {"plan-guid"},
+				}))
+
+				requestBytes, err := io.ReadAll(requests[0].Body)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(requestBytes).To(BeEmpty())
+			})
+
+			When("getting the binding fails", func() {
+				BeforeEach(func() {
+					brokerServer = brokerServer.WithHandler(
+						"/v2/service_instances/{instance_id}/service_bindings/{binding_id}",
+						http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+							w.WriteHeader(http.StatusTeapot)
+						}))
+				})
+
+				It("returns an error", func() {
+					Expect(getBindingErr).To(MatchError(ContainSubstring("get binding request failed")))
 				})
 			})
 		})

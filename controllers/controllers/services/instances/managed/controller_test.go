@@ -8,13 +8,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	korifiv1alpha1 "code.cloudfoundry.org/korifi/controllers/api/v1alpha1"
-	"code.cloudfoundry.org/korifi/controllers/controllers/services/instances/managed/fake"
 	"code.cloudfoundry.org/korifi/controllers/controllers/services/osbapi"
+	"code.cloudfoundry.org/korifi/controllers/controllers/services/osbapi/fake"
 	"code.cloudfoundry.org/korifi/model/services"
 	. "code.cloudfoundry.org/korifi/tests/matchers"
+	"code.cloudfoundry.org/korifi/tools"
 	"code.cloudfoundry.org/korifi/tools/k8s"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	. "github.com/onsi/gomega/gstruct"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -79,6 +81,7 @@ var _ = Describe("CFServiceInstance", func() {
 			},
 			Spec: korifiv1alpha1.CFServiceOfferingSpec{
 				ServiceOffering: services.ServiceOffering{
+					Name: "service-offering-name",
 					BrokerCatalog: services.ServiceBrokerCatalog{
 						ID: "service-offering-id",
 					},
@@ -152,6 +155,28 @@ var _ = Describe("CFServiceInstance", func() {
 		}).Should(Succeed())
 	})
 
+	It("defaults the service label to the service offering name", func() {
+		Eventually(func(g Gomega) {
+			g.Expect(adminClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
+			g.Expect(instance.Spec.ServiceLabel).To(PointTo(Equal("service-offering-name")))
+		}).Should(Succeed())
+	})
+
+	When("the service label is set", func() {
+		BeforeEach(func() {
+			Expect(k8s.Patch(ctx, adminClient, instance, func() {
+				instance.Spec.ServiceLabel = tools.PtrTo("custom-service-label")
+			})).To(Succeed())
+		})
+
+		It("does not override it", func() {
+			Consistently(func(g Gomega) {
+				g.Expect(adminClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
+				g.Expect(instance.Spec.ServiceLabel).To(PointTo(Equal("custom-service-label")))
+			}).Should(Succeed())
+		})
+	})
+
 	It("provisions the service", func() {
 		Eventually(func(g Gomega) {
 			g.Expect(brokerClient.ProvisionCallCount()).To(Equal(1))
@@ -171,9 +196,9 @@ var _ = Describe("CFServiceInstance", func() {
 
 			g.Expect(brokerClient.GetServiceInstanceLastOperationCallCount()).To(BeNumerically(">", 0))
 			_, lastOp := brokerClient.GetServiceInstanceLastOperationArgsForCall(brokerClient.GetServiceInstanceLastOperationCallCount() - 1)
-			g.Expect(lastOp).To(Equal(osbapi.GetLastOperationPayload{
-				ID: instance.Name,
-				GetLastOperationRequest: osbapi.GetLastOperationRequest{
+			g.Expect(lastOp).To(Equal(osbapi.GetServiceInstanceLastOperationRequest{
+				InstanceID: instance.Name,
+				GetLastOperationRequestParameters: osbapi.GetLastOperationRequestParameters{
 					ServiceId: "service-offering-id",
 					PlanID:    "service-plan-id",
 					Operation: "operation-1",
@@ -351,9 +376,9 @@ var _ = Describe("CFServiceInstance", func() {
 			Eventually(func(g Gomega) {
 				g.Expect(brokerClient.GetServiceInstanceLastOperationCallCount()).To(BeNumerically(">", 1))
 				_, actualLastOpPayload := brokerClient.GetServiceInstanceLastOperationArgsForCall(1)
-				g.Expect(actualLastOpPayload).To(Equal(osbapi.GetLastOperationPayload{
-					ID: instance.Name,
-					GetLastOperationRequest: osbapi.GetLastOperationRequest{
+				g.Expect(actualLastOpPayload).To(Equal(osbapi.GetServiceInstanceLastOperationRequest{
+					InstanceID: instance.Name,
+					GetLastOperationRequestParameters: osbapi.GetLastOperationRequestParameters{
 						ServiceId: "service-offering-id",
 						PlanID:    "service-plan-id",
 						Operation: "operation-1",
@@ -516,9 +541,9 @@ var _ = Describe("CFServiceInstance", func() {
 			Eventually(func(g Gomega) {
 				g.Expect(brokerClient.GetServiceInstanceLastOperationCallCount()).To(Equal(1))
 				_, actualLastOpPayload := brokerClient.GetServiceInstanceLastOperationArgsForCall(0)
-				g.Expect(actualLastOpPayload).To(Equal(osbapi.GetLastOperationPayload{
-					ID: instance.Name,
-					GetLastOperationRequest: osbapi.GetLastOperationRequest{
+				g.Expect(actualLastOpPayload).To(Equal(osbapi.GetServiceInstanceLastOperationRequest{
+					InstanceID: instance.Name,
+					GetLastOperationRequestParameters: osbapi.GetLastOperationRequestParameters{
 						ServiceId: "service-offering-id",
 						PlanID:    "service-plan-id",
 						Operation: "operation-1",
@@ -567,14 +592,10 @@ var _ = Describe("CFServiceInstance", func() {
 				brokerClient.DeprovisionReturns(osbapi.ServiceInstanceOperationResponse{}, errors.New("deprovision-failed"))
 			})
 
-			It("sets ready condition to false", func() {
+			It("still deletes the instance", func() {
 				Eventually(func(g Gomega) {
-					g.Expect(adminClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
-					g.Expect(instance.Status.Conditions).To(ContainElement(SatisfyAll(
-						HasType(Equal(korifiv1alpha1.StatusConditionReady)),
-						HasStatus(Equal(metav1.ConditionFalse)),
-						HasReason(Equal("DeprovisionFailed")),
-					)))
+					err := adminClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)
+					g.Expect(k8serrors.IsNotFound(err)).To(BeTrue())
 				}).Should(Succeed())
 			})
 		})

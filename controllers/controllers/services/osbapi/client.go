@@ -19,6 +19,12 @@ func (g GoneError) Error() string {
 	return "The operation resource is gone"
 }
 
+type ConflictError struct{}
+
+func (c ConflictError) Error() string {
+	return "The service binding already exists"
+}
+
 type Client struct {
 	broker     Broker
 	httpClient *http.Client
@@ -34,7 +40,7 @@ func NewClient(broker Broker, httpClient *http.Client) *Client {
 func (c *Client) GetCatalog(ctx context.Context) (Catalog, error) {
 	statusCode, resp, err := c.newBrokerRequester().
 		forBroker(c.broker).
-		sendRequest(ctx, "/v2/catalog", http.MethodGet, nil)
+		sendRequest(ctx, "/v2/catalog", http.MethodGet, nil, nil)
 	if err != nil {
 		return Catalog{}, fmt.Errorf("get catalog request failed: %w", err)
 	}
@@ -60,6 +66,7 @@ func (c *Client) Provision(ctx context.Context, payload InstanceProvisionPayload
 			ctx,
 			"/v2/service_instances/"+payload.InstanceID,
 			http.MethodPut,
+			nil,
 			payload.InstanceProvisionRequest,
 		)
 	if err != nil {
@@ -91,6 +98,7 @@ func (c *Client) Deprovision(ctx context.Context, payload InstanceDeprovisionPay
 			ctx,
 			"/v2/service_instances/"+payload.ID,
 			http.MethodDelete,
+			nil,
 			payload.InstanceDeprovisionRequest,
 		)
 	if err != nil {
@@ -110,17 +118,22 @@ func (c *Client) Deprovision(ctx context.Context, payload InstanceDeprovisionPay
 	return response, nil
 }
 
-func (c *Client) GetServiceInstanceLastOperation(ctx context.Context, payload GetLastOperationPayload) (LastOperationResponse, error) {
+func (c *Client) GetServiceInstanceLastOperation(ctx context.Context, request GetServiceInstanceLastOperationRequest) (LastOperationResponse, error) {
 	statusCode, respBytes, err := c.newBrokerRequester().
 		forBroker(c.broker).
 		sendRequest(
 			ctx,
-			"/v2/service_instances/"+payload.ID+"/last_operation",
+			"/v2/service_instances/"+request.InstanceID+"/last_operation",
 			http.MethodGet,
-			payload.GetLastOperationRequest,
+			map[string]string{
+				"service_id": request.ServiceId,
+				"plan_id":    request.PlanID,
+				"operation":  request.Operation,
+			},
+			nil,
 		)
 	if err != nil {
-		return LastOperationResponse{}, fmt.Errorf("getting last operation request failed: %w", err)
+		return LastOperationResponse{}, fmt.Errorf("getting service instance last operation request failed: %w", err)
 	}
 
 	if statusCode == http.StatusGone {
@@ -128,7 +141,108 @@ func (c *Client) GetServiceInstanceLastOperation(ctx context.Context, payload Ge
 	}
 
 	if statusCode != http.StatusOK {
-		return LastOperationResponse{}, fmt.Errorf("getting last operation request failed with code: %d", statusCode)
+		return LastOperationResponse{}, fmt.Errorf("getting service instance last operation request failed with code: %d", statusCode)
+	}
+
+	var response LastOperationResponse
+	err = json.Unmarshal(respBytes, &response)
+	if err != nil {
+		return LastOperationResponse{}, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return response, nil
+}
+
+func (c *Client) GetServiceBinding(ctx context.Context, request GetServiceBindingRequest) (GetBindingResponse, error) {
+	statusCode, respBytes, err := c.newBrokerRequester().
+		forBroker(c.broker).
+		sendRequest(
+			ctx,
+			"/v2/service_instances/"+request.InstanceID+"/service_bindings/"+request.BindingID,
+			http.MethodGet,
+			map[string]string{
+				"service_id": request.ServiceId,
+				"plan_id":    request.PlanID,
+			},
+			nil,
+		)
+	if err != nil {
+		return GetBindingResponse{}, fmt.Errorf("get binding request failed: %w", err)
+	}
+
+	if statusCode != http.StatusOK {
+		return GetBindingResponse{}, fmt.Errorf("get binding request failed with code: %d", statusCode)
+	}
+
+	var response GetBindingResponse
+	err = json.Unmarshal(respBytes, &response)
+	if err != nil {
+		return GetBindingResponse{}, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return response, nil
+}
+
+func (c *Client) Bind(ctx context.Context, payload BindPayload) (BindResponse, error) {
+	statusCode, respBytes, err := c.newBrokerRequester().
+		forBroker(c.broker).
+		async().
+		sendRequest(
+			ctx,
+			"/v2/service_instances/"+payload.InstanceID+"/service_bindings/"+payload.BindingID,
+			http.MethodPut,
+			nil,
+			payload.BindRequest,
+		)
+	if err != nil {
+		return BindResponse{}, fmt.Errorf("bind request failed: %w", err)
+	}
+
+	if statusCode == http.StatusConflict {
+		return BindResponse{}, ConflictError{}
+	}
+
+	if statusCode >= 300 {
+		return BindResponse{}, fmt.Errorf("binding request failed with code: %d", statusCode)
+	}
+
+	var response BindResponse
+	if statusCode == http.StatusCreated {
+		response.Complete = true
+	}
+
+	err = json.Unmarshal(respBytes, &response)
+	if err != nil {
+		return BindResponse{}, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return response, nil
+}
+
+func (c *Client) GetServiceBindingLastOperation(ctx context.Context, request GetServiceBindingLastOperationRequest) (LastOperationResponse, error) {
+	statusCode, respBytes, err := c.newBrokerRequester().
+		forBroker(c.broker).
+		sendRequest(
+			ctx,
+			"/v2/service_instances/"+request.InstanceID+"/service_bindings/"+request.BindingID+"/last_operation",
+			http.MethodGet,
+			map[string]string{
+				"service_id": request.ServiceId,
+				"plan_id":    request.PlanID,
+				"operation":  request.Operation,
+			},
+			nil,
+		)
+	if err != nil {
+		return LastOperationResponse{}, fmt.Errorf("getting service binding last operation request failed: %w", err)
+	}
+
+	if statusCode == http.StatusGone {
+		return LastOperationResponse{}, GoneError{}
+	}
+
+	if statusCode != http.StatusOK {
+		return LastOperationResponse{}, fmt.Errorf("getting service binding last operation request failed with code: %d", statusCode)
 	}
 
 	var response LastOperationResponse
@@ -173,7 +287,7 @@ func (r *brokerRequester) async() *brokerRequester {
 	return r
 }
 
-func (r *brokerRequester) sendRequest(ctx context.Context, requestPath string, method string, payload any) (int, []byte, error) {
+func (r *brokerRequester) sendRequest(ctx context.Context, requestPath string, method string, queryParams map[string]string, payload any) (int, []byte, error) {
 	requestUrl, err := url.JoinPath(r.broker.URL, requestPath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to build broker requestUrl for path %q: %w", requestPath, err)
@@ -194,11 +308,18 @@ func (r *brokerRequester) sendRequest(ctx context.Context, requestPath string, m
 		return 0, nil, fmt.Errorf("failed to create new HTTP request: %w", err)
 	}
 	req.Header.Add("X-Broker-API-Version", osbapiVersion)
-	if r.acceptsIncomplete {
-		queryValues := req.URL.Query()
-		queryValues.Add("accepts_incomplete", "true")
-		req.URL.RawQuery = queryValues.Encode()
+
+	queryValues := req.URL.Query()
+	for queryParam, queryParamValue := range queryParams {
+		if queryParamValue == "" {
+			continue
+		}
+		queryValues.Add(queryParam, queryParamValue)
 	}
+	if r.acceptsIncomplete {
+		queryValues.Add("accepts_incomplete", "true")
+	}
+	req.URL.RawQuery = queryValues.Encode()
 
 	authHeader, err := r.buildAuthorizationHeaderValue()
 	if err != nil {

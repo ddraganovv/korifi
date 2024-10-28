@@ -50,10 +50,11 @@ type CredentialsReconciler interface {
 }
 
 type Reconciler struct {
-	k8sClient                 client.Client
-	scheme                    *runtime.Scheme
-	log                       logr.Logger
-	upsiCredentialsReconciler CredentialsReconciler
+	k8sClient                    client.Client
+	scheme                       *runtime.Scheme
+	log                          logr.Logger
+	upsiCredentialsReconciler    CredentialsReconciler
+	managedCredentialsReconciler CredentialsReconciler
 }
 
 func NewReconciler(
@@ -61,8 +62,15 @@ func NewReconciler(
 	scheme *runtime.Scheme,
 	log logr.Logger,
 	upsiCredentialsReconciler CredentialsReconciler,
+	managedCredentialsReconciler CredentialsReconciler,
 ) *k8s.PatchingReconciler[korifiv1alpha1.CFServiceBinding, *korifiv1alpha1.CFServiceBinding] {
-	cfBindingReconciler := &Reconciler{k8sClient: k8sClient, scheme: scheme, log: log, upsiCredentialsReconciler: upsiCredentialsReconciler}
+	cfBindingReconciler := &Reconciler{
+		k8sClient:                    k8sClient,
+		scheme:                       scheme,
+		log:                          log,
+		upsiCredentialsReconciler:    upsiCredentialsReconciler,
+		managedCredentialsReconciler: managedCredentialsReconciler,
+	}
 	return k8s.NewPatchingReconciler(log, k8sClient, cfBindingReconciler)
 }
 
@@ -146,14 +154,20 @@ func (r *Reconciler) ReconcileResource(ctx context.Context, cfServiceBinding *ko
 	cfServiceBinding.Status.ObservedGeneration = cfServiceBinding.Generation
 	log.V(1).Info("set observed generation", "generation", cfServiceBinding.Status.ObservedGeneration)
 
+	if cfServiceBinding.Annotations == nil {
+		cfServiceBinding.Annotations = map[string]string{}
+	}
+	cfServiceBinding.Annotations[korifiv1alpha1.ServiceInstanceTypeAnnotationKey] = string(cfServiceInstance.Spec.Type)
+
 	err = controllerutil.SetOwnerReference(cfServiceInstance, cfServiceBinding, r.scheme)
 	if err != nil {
 		log.Info("error when making the service instance owner of the service binding", "reason", err)
 		return ctrl.Result{}, err
 	}
 
-	res, err := r.upsiCredentialsReconciler.ReconcileResource(ctx, cfServiceBinding)
-	if needsRequeue(res) || err != nil {
+	res, err := r.reconcileCredentialsSecrets(ctx, cfServiceInstance.Spec.Type, cfServiceBinding)
+	if needsRequeue(res, err) {
+		log.Error(err, "failed to reconcile binding credentials")
 		return res, err
 	}
 
@@ -177,7 +191,19 @@ func (r *Reconciler) ReconcileResource(ctx context.Context, cfServiceBinding *ko
 	return ctrl.Result{}, nil
 }
 
-func needsRequeue(res ctrl.Result) bool {
+func (r *Reconciler) reconcileCredentialsSecrets(ctx context.Context, instanceType korifiv1alpha1.InstanceType, cfServiceBinding *korifiv1alpha1.CFServiceBinding) (ctrl.Result, error) {
+	if instanceType == korifiv1alpha1.UserProvidedType {
+		return r.upsiCredentialsReconciler.ReconcileResource(ctx, cfServiceBinding)
+	}
+
+	return r.managedCredentialsReconciler.ReconcileResource(ctx, cfServiceBinding)
+}
+
+func needsRequeue(res ctrl.Result, err error) bool {
+	if err != nil {
+		return true
+	}
+
 	return !res.IsZero()
 }
 
@@ -195,14 +221,14 @@ func isSbServiceBindingReady(sbServiceBinding *servicebindingv1beta1.ServiceBind
 }
 
 func (r *Reconciler) reconcileSBServiceBinding(ctx context.Context, cfServiceBinding *korifiv1alpha1.CFServiceBinding) (*servicebindingv1beta1.ServiceBinding, error) {
-	credentialsSecret := &corev1.Secret{
+	bindingSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      cfServiceBinding.Name,
+			Name:      cfServiceBinding.Status.Binding.Name,
 			Namespace: cfServiceBinding.Namespace,
 		},
 	}
 
-	err := r.k8sClient.Get(ctx, client.ObjectKeyFromObject(credentialsSecret), credentialsSecret)
+	err := r.k8sClient.Get(ctx, client.ObjectKeyFromObject(bindingSecret), bindingSecret)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get service binding credentials secret %q: %w", cfServiceBinding.Status.Binding.Name, err)
 	}
@@ -212,14 +238,16 @@ func (r *Reconciler) reconcileSBServiceBinding(ctx context.Context, cfServiceBin
 	_, err = controllerutil.CreateOrPatch(ctx, r.k8sClient, sbServiceBinding, func() error {
 		sbServiceBinding.Spec.Name = getSBServiceBindingName(cfServiceBinding)
 
-		secretType, hasType := credentialsSecret.Data["type"]
-		if hasType && len(secretType) > 0 {
-			sbServiceBinding.Spec.Type = string(secretType)
-		}
+		if cfServiceBinding.Annotations[korifiv1alpha1.ServiceInstanceTypeAnnotationKey] == korifiv1alpha1.UserProvidedType {
+			secretType, hasType := bindingSecret.Data["type"]
+			if hasType && len(secretType) > 0 {
+				sbServiceBinding.Spec.Type = string(secretType)
+			}
 
-		secretProvider, hasProvider := credentialsSecret.Data["provider"]
-		if hasProvider {
-			sbServiceBinding.Spec.Provider = string(secretProvider)
+			secretProvider, hasProvider := bindingSecret.Data["provider"]
+			if hasProvider {
+				sbServiceBinding.Spec.Provider = string(secretProvider)
+			}
 		}
 		return controllerutil.SetControllerReference(cfServiceBinding, sbServiceBinding, r.scheme)
 	})
@@ -242,7 +270,7 @@ func (r *Reconciler) toSBServiceBinding(cfServiceBinding *korifiv1alpha1.CFServi
 			},
 		},
 		Spec: servicebindingv1beta1.ServiceBindingSpec{
-			Type: "user-provided",
+			Type: cfServiceBinding.Annotations[korifiv1alpha1.ServiceInstanceTypeAnnotationKey],
 			Workload: servicebindingv1beta1.ServiceBindingWorkloadReference{
 				APIVersion: "apps/v1",
 				Kind:       "StatefulSet",

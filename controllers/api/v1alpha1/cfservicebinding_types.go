@@ -24,6 +24,13 @@ import (
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
+const (
+	BindingFailedCondition    = "BindingFailed"
+	BindingRequestedCondition = "BindingRequested"
+
+	ServiceInstanceTypeAnnotationKey = "korifi.cloudfoundry.org/service-instance-type"
+)
+
 // CFServiceBindingSpec defines the desired state of CFServiceBinding
 type CFServiceBindingSpec struct {
 	// The mutable, user-friendly name of the service binding. Unlike metadata.name, the user can change this field
@@ -48,9 +55,18 @@ type CFServiceBindingStatus struct {
 	// +optional
 	Binding v1.LocalObjectReference `json:"binding"`
 
+	// The
+	// [operation](https://github.com/openservicebrokerapi/servicebroker/blob/master/spec.md#binding)
+	// of the bind request to the the OSBAPI broker. Only makes sense for
+	// bindings to managed service instances
+	// +optional
+	BindingOperation string `json:"bindingOperation"`
+
 	// A reference to the Secret containing the binding Credentials object. For
 	// bindings to user-provided services this refers to the credentials secret
-	// from the service instance
+	// from the service instance. For managed services the secret contains the
+	// credentials object returned by the broker when binding to a service
+	// instance
 	// +optional
 	Credentials v1.LocalObjectReference `json:"credentials"`
 

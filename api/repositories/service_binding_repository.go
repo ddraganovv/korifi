@@ -14,6 +14,7 @@ import (
 	korifiv1alpha1 "code.cloudfoundry.org/korifi/controllers/api/v1alpha1"
 	"code.cloudfoundry.org/korifi/controllers/webhooks/services/bindings"
 	"code.cloudfoundry.org/korifi/controllers/webhooks/validation"
+	"code.cloudfoundry.org/korifi/model"
 	"code.cloudfoundry.org/korifi/tools"
 	"code.cloudfoundry.org/korifi/tools/k8s"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -65,6 +67,7 @@ type ServiceBindingRecord struct {
 	UpdatedAt           *time.Time
 	LastOperation       ServiceBindingLastOperation
 	Parameters          map[string]any
+	Ready               bool
 }
 
 func (r ServiceBindingRecord) Relationships() map[string]string {
@@ -173,9 +176,17 @@ func (r *ServiceBindingRepo) CreateServiceBinding(ctx context.Context, authInfo 
 		return ServiceBindingRecord{}, apierrors.FromK8sError(err, ServiceBindingResourceType)
 	}
 
-	cfServiceBinding, err = r.bindingConditionAwaiter.AwaitCondition(ctx, userClient, cfServiceBinding, korifiv1alpha1.StatusConditionReady)
+	cfServiceInstance := new(korifiv1alpha1.CFServiceInstance)
+	err = userClient.Get(ctx, types.NamespacedName{Name: cfServiceBinding.Spec.Service.Name, Namespace: cfServiceBinding.Namespace}, cfServiceInstance)
 	if err != nil {
-		return ServiceBindingRecord{}, err
+		return ServiceBindingRecord{}, fmt.Errorf("failed to get service instance: %w", err)
+	}
+
+	if cfServiceInstance.Spec.Type == korifiv1alpha1.UserProvidedType {
+		cfServiceBinding, err = r.bindingConditionAwaiter.AwaitCondition(ctx, userClient, cfServiceBinding, korifiv1alpha1.StatusConditionReady)
+		if err != nil {
+			return ServiceBindingRecord{}, err
+		}
 	}
 
 	return serviceBindingToRecord(cfServiceBinding)
@@ -297,6 +308,19 @@ func (r *ServiceBindingRepo) UpdateServiceBinding(ctx context.Context, authInfo 
 	return serviceBindingToRecord(serviceBinding)
 }
 
+func (r *ServiceBindingRepo) GetState(ctx context.Context, authInfo authorization.Info, guid string) (model.CFResourceState, error) {
+	bindingRecord, err := r.GetServiceBinding(ctx, authInfo, guid)
+	if err != nil {
+		return model.CFResourceStateUnknown, err
+	}
+
+	if bindingRecord.Ready {
+		return model.CFResourceStateReady, nil
+	}
+
+	return model.CFResourceStateUnknown, nil
+}
+
 // nolint:dupl
 func (r *ServiceBindingRepo) ListServiceBindings(ctx context.Context, authInfo authorization.Info, message ListServiceBindingsMessage) ([]ServiceBindingRecord, error) {
 	userClient, err := r.userClientFactory.BuildClient(authInfo)
@@ -343,9 +367,9 @@ func serviceBindingToRecord(binding *korifiv1alpha1.CFServiceBinding) (ServiceBi
 		}
 	}
 
-	record := ServiceBindingRecord{
+	return ServiceBindingRecord{
 		GUID:                binding.Name,
-		Type:                binding.Labels[korifiv1alpha1.CFBindingTypeLabelKey],
+		Type:                ServiceBindingTypeApp,
 		Name:                binding.Spec.DisplayName,
 		AppGUID:             binding.Spec.AppRef.Name,
 		ServiceInstanceGUID: binding.Spec.Service.Name,
@@ -354,17 +378,64 @@ func serviceBindingToRecord(binding *korifiv1alpha1.CFServiceBinding) (ServiceBi
 		Annotations:         binding.Annotations,
 		CreatedAt:           binding.CreationTimestamp.Time,
 		UpdatedAt:           getLastUpdatedTime(binding),
-		LastOperation: ServiceBindingLastOperation{
-			Type:        "create",
-			State:       "succeeded",
-			Description: nil,
-			CreatedAt:   binding.CreationTimestamp.Time,
-			UpdatedAt:   getLastUpdatedTime(binding),
-		},
-		Parameters: parameters,
+		LastOperation:       serviceBindingRecordLastOperation(*binding),
+		Ready:               isBindingReady(*binding),
+		Parameters:          parameters,
+	}, nil
+}
+
+func isBindingReady(binding korifiv1alpha1.CFServiceBinding) bool {
+	if binding.Generation != binding.Status.ObservedGeneration {
+		return false
 	}
 
-	return record, nil
+	return meta.IsStatusConditionTrue(binding.Status.Conditions, korifiv1alpha1.StatusConditionReady)
+}
+
+func serviceBindingRecordLastOperation(binding korifiv1alpha1.CFServiceBinding) ServiceBindingLastOperation {
+	if binding.DeletionTimestamp != nil {
+		return ServiceBindingLastOperation{
+			Type:      "delete",
+			State:     "in progress",
+			CreatedAt: binding.DeletionTimestamp.Time,
+			UpdatedAt: getLastUpdatedTime(&binding),
+		}
+	}
+
+	readyCondition := meta.FindStatusCondition(binding.Status.Conditions, korifiv1alpha1.StatusConditionReady)
+	if readyCondition == nil {
+		return ServiceBindingLastOperation{
+			Type:      "create",
+			State:     "initial",
+			CreatedAt: binding.CreationTimestamp.Time,
+			UpdatedAt: getLastUpdatedTime(&binding),
+		}
+	}
+
+	if readyCondition.Status == metav1.ConditionTrue {
+		return ServiceBindingLastOperation{
+			Type:      "create",
+			State:     "succeeded",
+			CreatedAt: binding.CreationTimestamp.Time,
+			UpdatedAt: getLastUpdatedTime(&binding),
+		}
+	}
+
+	if meta.IsStatusConditionTrue(binding.Status.Conditions, korifiv1alpha1.BindingFailedCondition) {
+		return ServiceBindingLastOperation{
+			Type:      "create",
+			State:     "failed",
+			CreatedAt: binding.CreationTimestamp.Time,
+			UpdatedAt: tools.PtrTo(readyCondition.LastTransitionTime.Time),
+		}
+	}
+
+	return ServiceBindingLastOperation{
+		Type:      "create",
+		State:     "in progress",
+		CreatedAt: binding.CreationTimestamp.Time,
+		UpdatedAt: tools.PtrTo(readyCondition.LastTransitionTime.Time),
+	}
 }
 
 func serviceBindingsToRecords(serviceBindings itx.Iterator[korifiv1alpha1.CFServiceBinding]) ([]ServiceBindingRecord, error) {

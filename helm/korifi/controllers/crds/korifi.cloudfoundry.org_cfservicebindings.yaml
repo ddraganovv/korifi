@@ -139,6 +139,13 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
+              bindingOperation:
+                description: |-
+                  The
+                  [operation](https://github.com/openservicebrokerapi/servicebroker/blob/master/spec.md#binding)
+                  of the bind request to the the OSBAPI broker. Only makes sense for
+                  bindings to managed service instances
+                type: string
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current
@@ -199,7 +206,9 @@ spec:
                 description: |-
                   A reference to the Secret containing the binding Credentials object. For
                   bindings to user-provided services this refers to the credentials secret
-                  from the service instance
+                  from the service instance. For managed services the secret contains the
+                  credentials object returned by the broker when binding to a service
+                  instance
                 properties:
                   name:
                     default: ""

@@ -23,6 +23,9 @@ func main() {
 	http.HandleFunc("PUT /v2/service_instances/{id}", provisionServiceInstanceHandler)
 	http.HandleFunc("DELETE /v2/service_instances/{id}", deprovisionServiceInstanceHandler)
 	http.HandleFunc("GET /v2/service_instances/{id}/last_operation", serviceInstanceLastOperationHandler)
+	http.HandleFunc("PUT /v2/service_instances/{instance_id}/service_bindings/{binding_id}", bindHandler)
+	http.HandleFunc("GET /v2/service_instances/{instance_id}/service_bindings/{binding_id}/last_operation", serviceBindingLastOperationHandler)
+	http.HandleFunc("GET /v2/service_instances/{instance_id}/service_bindings/{binding_id}", getServiceBindingHandler)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -96,6 +99,42 @@ func serviceInstanceLastOperationHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	fmt.Fprint(w, `{"state":"succeeded"}`)
+}
+
+func bindHandler(w http.ResponseWriter, r *http.Request) {
+	if status, err := checkCredentials(w, r); err != nil {
+		w.WriteHeader(status)
+		fmt.Fprintf(w, "Credentials check failed: %v", err)
+		return
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+	fmt.Fprint(w, `{
+		"operation":"bind-operation"
+	}`)
+}
+
+func serviceBindingLastOperationHandler(w http.ResponseWriter, r *http.Request) {
+	if status, err := checkCredentials(w, r); err != nil {
+		w.WriteHeader(status)
+		fmt.Fprintf(w, "Credentials check failed: %v", err)
+		return
+	}
+
+	fmt.Fprint(w, `{"state":"succeeded"}`)
+}
+
+func getServiceBindingHandler(w http.ResponseWriter, r *http.Request) {
+	if status, err := checkCredentials(w, r); err != nil {
+		w.WriteHeader(status)
+		fmt.Fprintf(w, "Credentials check failed: %v", err)
+		return
+	}
+
+	fmt.Fprint(w, `{"credentials":{
+		"user":"my-user",
+		"password":"my-password"
+	}}`)
 }
 
 func checkCredentials(_ http.ResponseWriter, r *http.Request) (int, error) {

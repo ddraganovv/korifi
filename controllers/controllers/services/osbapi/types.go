@@ -41,12 +41,29 @@ type InstanceProvisionRequest struct {
 	Parameters map[string]any `json:"parameters"`
 }
 
-type GetLastOperationPayload struct {
-	ID string
-	GetLastOperationRequest
+type GetServiceInstanceLastOperationRequest struct {
+	InstanceID string
+	GetLastOperationRequestParameters
 }
 
-type GetLastOperationRequest struct {
+type GetServiceBindingLastOperationRequest struct {
+	InstanceID string
+	BindingID  string
+	GetLastOperationRequestParameters
+}
+
+type GetServiceBindingRequest struct {
+	InstanceID string
+	BindingID  string
+	ServiceId  string `json:"service_id"`
+	PlanID     string `json:"plan_id"`
+}
+
+type GetBindingResponse struct {
+	Credentials map[string]any `json:"credentials"`
+}
+
+type GetLastOperationRequestParameters struct {
 	ServiceId string `json:"service_id"`
 	PlanID    string `json:"plan_id"`
 	Operation string `json:"operation"`
@@ -60,6 +77,30 @@ type InstanceDeprovisionPayload struct {
 type InstanceDeprovisionRequest struct {
 	ServiceId string `json:"service_id"`
 	PlanID    string `json:"plan_id"`
+}
+
+type BindRequest struct {
+	ServiceId    string         `json:"service_id"`
+	PlanID       string         `json:"plan_id"`
+	AppGUID      string         `json:"app_guid"`
+	BindResource BindResource   `json:"bind_resource"`
+	Parameters   map[string]any `json:"parameters"`
+}
+
+type BindPayload struct {
+	BindingID  string
+	InstanceID string
+	BindRequest
+}
+
+type BindResponse struct {
+	Credentials map[string]any `json:"credentials"`
+	Operation   string         `json:"operation"`
+	Complete    bool
+}
+
+type BindResource struct {
+	AppGUID string `json:"app_guid"`
 }
 
 type Plan struct {

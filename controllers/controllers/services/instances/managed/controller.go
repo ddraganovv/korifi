@@ -24,6 +24,7 @@ import (
 
 	korifiv1alpha1 "code.cloudfoundry.org/korifi/controllers/api/v1alpha1"
 	"code.cloudfoundry.org/korifi/controllers/controllers/services/osbapi"
+	"code.cloudfoundry.org/korifi/tools"
 	"code.cloudfoundry.org/korifi/tools/k8s"
 
 	"github.com/go-logr/logr"
@@ -39,16 +40,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
-//counterfeiter:generate -o fake -fake-name BrokerClient code.cloudfoundry.org/korifi/controllers/controllers/services/osbapi.BrokerClient
-
-//counterfeiter:generate -o fake -fake-name BrokerClientFactory code.cloudfoundry.org/korifi/controllers/controllers/services/osbapi.BrokerClientFactory
-
 type Reconciler struct {
 	k8sClient           client.Client
 	osbapiClientFactory osbapi.BrokerClientFactory
 	scheme              *runtime.Scheme
 	rootNamespace       string
 	log                 logr.Logger
+	assets              *osbapi.Assets
 }
 
 func NewReconciler(
@@ -64,6 +62,7 @@ func NewReconciler(
 		scheme:              scheme,
 		rootNamespace:       rootNamespace,
 		log:                 log,
+		assets:              osbapi.NewAssets(client, rootNamespace),
 	})
 }
 
@@ -105,22 +104,26 @@ func (r *Reconciler) ReconcileResource(ctx context.Context, serviceInstance *kor
 		return ctrl.Result{}, k8s.NewNotReadyError().WithReason("ProvisioningFailed").WithNoRequeue()
 	}
 
-	servicePlan, err := r.getServicePlan(ctx, serviceInstance.Spec.PlanGUID)
+	servicePlan, err := r.assets.GetServicePlan(ctx, serviceInstance.Spec.PlanGUID)
 	if err != nil {
 		log.Error(err, "failed to get service plan")
 		return ctrl.Result{}, err
 	}
 
-	serviceBroker, err := r.getServiceBroker(ctx, servicePlan.Labels[korifiv1alpha1.RelServiceBrokerGUIDLabel])
+	serviceBroker, err := r.assets.GetServiceBroker(ctx, servicePlan.Labels[korifiv1alpha1.RelServiceBrokerGUIDLabel])
 	if err != nil {
 		log.Error(err, "failed to get service broker")
 		return ctrl.Result{}, err
 	}
 
-	serviceOffering, err := r.getServiceOffering(ctx, servicePlan.Labels[korifiv1alpha1.RelServiceOfferingGUIDLabel])
+	serviceOffering, err := r.assets.GetServiceOffering(ctx, servicePlan.Labels[korifiv1alpha1.RelServiceOfferingGUIDLabel])
 	if err != nil {
 		log.Error(err, "failed to get service offering")
 		return ctrl.Result{}, err
+	}
+
+	if serviceInstance.Spec.ServiceLabel == nil {
+		serviceInstance.Spec.ServiceLabel = tools.PtrTo(serviceOffering.Spec.Name)
 	}
 
 	osbapiClient, err := r.osbapiClientFactory.CreateClient(ctx, serviceBroker)
@@ -133,9 +136,9 @@ func (r *Reconciler) ReconcileResource(ctx context.Context, serviceInstance *kor
 		return r.provisionServiceInstance(ctx, osbapiClient, serviceInstance, servicePlan, serviceOffering)
 	}
 
-	lastOpResponse, err := osbapiClient.GetServiceInstanceLastOperation(ctx, osbapi.GetLastOperationPayload{
-		ID: serviceInstance.Name,
-		GetLastOperationRequest: osbapi.GetLastOperationRequest{
+	lastOpResponse, err := osbapiClient.GetServiceInstanceLastOperation(ctx, osbapi.GetServiceInstanceLastOperationRequest{
+		InstanceID: serviceInstance.Name,
+		GetLastOperationRequestParameters: osbapi.GetLastOperationRequestParameters{
 			ServiceId: serviceOffering.Spec.BrokerCatalog.ID,
 			PlanID:    servicePlan.Spec.BrokerCatalog.ID,
 			Operation: serviceInstance.Status.ProvisionOperation,
@@ -252,10 +255,7 @@ func (r *Reconciler) finalizeCFServiceInstance(
 	}
 
 	if !isDeprovisionRequested(serviceInstance) {
-		err := r.deprovisionServiceInstance(ctx, serviceInstance)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
+		r.deprovisionServiceInstance(ctx, serviceInstance)
 
 		meta.SetStatusCondition(&serviceInstance.Status.Conditions, metav1.Condition{
 			Type:               korifiv1alpha1.DeprovisionRequestedCondition,
@@ -272,31 +272,31 @@ func (r *Reconciler) finalizeCFServiceInstance(
 	return ctrl.Result{}, nil
 }
 
-func (r *Reconciler) deprovisionServiceInstance(ctx context.Context, serviceInstance *korifiv1alpha1.CFServiceInstance) error {
-	log := logr.FromContextOrDiscard(ctx).WithName("deprovisionServiceInstance")
+func (r *Reconciler) deprovisionServiceInstance(ctx context.Context, serviceInstance *korifiv1alpha1.CFServiceInstance) {
+	log := logr.FromContextOrDiscard(ctx).WithName("finalizeCFServiceInstance")
 
-	servicePlan, err := r.getServicePlan(ctx, serviceInstance.Spec.PlanGUID)
+	servicePlan, err := r.assets.GetServicePlan(ctx, serviceInstance.Spec.PlanGUID)
 	if err != nil {
 		log.Error(err, "failed to get service plan")
-		return nil
+		return
 	}
 
-	serviceBroker, err := r.getServiceBroker(ctx, servicePlan.Labels[korifiv1alpha1.RelServiceBrokerGUIDLabel])
+	serviceBroker, err := r.assets.GetServiceBroker(ctx, servicePlan.Labels[korifiv1alpha1.RelServiceBrokerGUIDLabel])
 	if err != nil {
 		log.Error(err, "failed to get service broker")
-		return nil
+		return
 	}
 
-	serviceOffering, err := r.getServiceOffering(ctx, servicePlan.Labels[korifiv1alpha1.RelServiceOfferingGUIDLabel])
+	serviceOffering, err := r.assets.GetServiceOffering(ctx, servicePlan.Labels[korifiv1alpha1.RelServiceOfferingGUIDLabel])
 	if err != nil {
 		log.Error(err, "failed to get service offering")
-		return nil
+		return
 	}
 
 	osbapiClient, err := r.osbapiClientFactory.CreateClient(ctx, serviceBroker)
 	if err != nil {
 		log.Error(err, "failed to create broker client", "broker", serviceBroker.Name)
-		return nil
+		return
 	}
 	var deprovisionResponse osbapi.ServiceInstanceOperationResponse
 	deprovisionResponse, err = osbapiClient.Deprovision(ctx, osbapi.InstanceDeprovisionPayload{
@@ -308,11 +308,10 @@ func (r *Reconciler) deprovisionServiceInstance(ctx context.Context, serviceInst
 	})
 	if err != nil {
 		log.Error(err, "failed to deprovision service instance")
-		return k8s.NewNotReadyError().WithReason("DeprovisionFailed")
+		return
 	}
 
 	serviceInstance.Status.DeprovisionOperation = deprovisionResponse.Operation
-	return nil
 }
 
 func (r *Reconciler) getNamespace(ctx context.Context, namespaceName string) (*corev1.Namespace, error) {
@@ -327,50 +326,6 @@ func (r *Reconciler) getNamespace(ctx context.Context, namespaceName string) (*c
 		return nil, fmt.Errorf("failed to get namespace %q: %w", namespaceName, err)
 	}
 	return namespace, nil
-}
-
-func (r *Reconciler) getServiceOffering(ctx context.Context, offeringGUID string) (*korifiv1alpha1.CFServiceOffering, error) {
-	serviceOffering := &korifiv1alpha1.CFServiceOffering{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      offeringGUID,
-			Namespace: r.rootNamespace,
-		},
-	}
-	err := r.k8sClient.Get(ctx, client.ObjectKeyFromObject(serviceOffering), serviceOffering)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get service offering %q: %w", offeringGUID, err)
-	}
-
-	return serviceOffering, nil
-}
-
-func (r *Reconciler) getServicePlan(ctx context.Context, planGUID string) (*korifiv1alpha1.CFServicePlan, error) {
-	servicePlan := &korifiv1alpha1.CFServicePlan{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      planGUID,
-			Namespace: r.rootNamespace,
-		},
-	}
-	err := r.k8sClient.Get(ctx, client.ObjectKeyFromObject(servicePlan), servicePlan)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get service plan %q: %w", planGUID, err)
-	}
-	return servicePlan, nil
-}
-
-func (r *Reconciler) getServiceBroker(ctx context.Context, brokerGUID string) (*korifiv1alpha1.CFServiceBroker, error) {
-	serviceBroker := &korifiv1alpha1.CFServiceBroker{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      brokerGUID,
-			Namespace: r.rootNamespace,
-		},
-	}
-	err := r.k8sClient.Get(ctx, client.ObjectKeyFromObject(serviceBroker), serviceBroker)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get service broker %q: %w", brokerGUID, err)
-	}
-
-	return serviceBroker, nil
 }
 
 func isProvisionRequested(instance *korifiv1alpha1.CFServiceInstance) bool {

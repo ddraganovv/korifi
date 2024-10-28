@@ -47,8 +47,9 @@ type CFServiceInstanceSpec struct {
 	// Type of the Service Instance. Must be `user-provided` or `managed`
 	Type InstanceType `json:"type"`
 
-	// Service label to use when adding this instance to VCAP_Services
-	// Defaults to `user-provided` when this field is not set
+	// Service label to use when adding this instance to VCAP_SERVICES. If not
+	// set, the service instance Type would be used. For managed services the
+	// value is defaulted to the offering name
 	// +optional
 	ServiceLabel *string `json:"serviceLabel,omitempty"`
 
@@ -82,7 +83,14 @@ type CFServiceInstanceStatus struct {
 	//+kubebuilder:validation:Optional
 	CredentialsObservedVersion string `json:"credentialsObservedVersion,omitempty"`
 
-	ProvisionOperation   string `json:"provisionOperation,omitempty"`
+	// The operation returned by the OSBAPI broker when instance provisioning
+	// is requested. Only makes sense for managed service instances
+	//+kubebuilder:validation:Optional
+	ProvisionOperation string `json:"provisionOperation,omitempty"`
+
+	// The operation returned by the OSBAPI broker when instance deprovisioning
+	// is requested. Only makes sense for managed service instances
+	//+kubebuilder:validation:Optional
 	DeprovisionOperation string `json:"deprovisionOperation,omitempty"`
 }
 
