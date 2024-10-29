@@ -31,7 +31,6 @@ import (
 const (
 	LabelServiceBindingProvisionedService = "servicebinding.io/provisioned-service"
 	ServiceBindingResourceType            = "Service Binding"
-	ServiceBindingTypeApp                 = "app"
 )
 
 type ServiceBindingRepo struct {
@@ -86,6 +85,7 @@ type ServiceBindingLastOperation struct {
 }
 
 type CreateServiceBindingMessage struct {
+	Type                string
 	Name                *string
 	ServiceInstanceGUID string
 	AppGUID             string
@@ -100,6 +100,7 @@ type ListServiceBindingsMessage struct {
 	AppGUIDs             []string
 	ServiceInstanceGUIDs []string
 	LabelSelector        string
+	Type                 string
 }
 
 func (m *ListServiceBindingsMessage) matches(serviceBinding korifiv1alpha1.CFServiceBinding) bool {
@@ -107,9 +108,10 @@ func (m *ListServiceBindingsMessage) matches(serviceBinding korifiv1alpha1.CFSer
 		tools.EmptyOrContains(m.AppGUIDs, serviceBinding.Spec.AppRef.Name)
 }
 
-func (m CreateServiceBindingMessage) toCFServiceBinding() *korifiv1alpha1.CFServiceBinding {
+func (m CreateServiceBindingMessage) toCFServiceBinding() (*korifiv1alpha1.CFServiceBinding, error) {
 	guid := uuid.NewString()
-	return &korifiv1alpha1.CFServiceBinding{
+
+	binding := &korifiv1alpha1.CFServiceBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      guid,
 			Namespace: m.SpaceGUID,
@@ -122,9 +124,14 @@ func (m CreateServiceBindingMessage) toCFServiceBinding() *korifiv1alpha1.CFServ
 				APIVersion: korifiv1alpha1.GroupVersion.Identifier(),
 				Name:       m.ServiceInstanceGUID,
 			},
-			AppRef: corev1.LocalObjectReference{Name: m.AppGUID},
 		},
 	}
+
+	if m.AppGUID != "" {
+		binding.Spec.AppRef = corev1.LocalObjectReference{Name: m.AppGUID}
+	}
+
+	return binding, nil
 }
 
 type UpdateServiceBindingMessage struct {
@@ -138,18 +145,23 @@ func (r *ServiceBindingRepo) CreateServiceBinding(ctx context.Context, authInfo 
 		return ServiceBindingRecord{}, fmt.Errorf("failed to build user client: %w", err)
 	}
 
-	cfServiceBinding := message.toCFServiceBinding()
-
-	cfApp := new(korifiv1alpha1.CFApp)
-	err = userClient.Get(ctx, types.NamespacedName{Name: cfServiceBinding.Spec.AppRef.Name, Namespace: cfServiceBinding.Namespace}, cfApp)
+	cfServiceBinding, err := message.toCFServiceBinding()
 	if err != nil {
-		return ServiceBindingRecord{},
-			apierrors.AsUnprocessableEntity(
-				apierrors.FromK8sError(err, ServiceBindingResourceType),
-				"Unable to use app. Ensure that the app exists and you have access to it.",
-				apierrors.ForbiddenError{},
-				apierrors.NotFoundError{},
-			)
+		return ServiceBindingRecord{}, fmt.Errorf("failed to map to CFServiceBinding: %w", err)
+	}
+
+	if message.Type == korifiv1alpha1.CFServiceBindingTypeApp {
+		cfApp := new(korifiv1alpha1.CFApp)
+		err = userClient.Get(ctx, types.NamespacedName{Name: cfServiceBinding.Spec.AppRef.Name, Namespace: cfServiceBinding.Namespace}, cfApp)
+		if err != nil {
+			return ServiceBindingRecord{},
+				apierrors.AsUnprocessableEntity(
+					apierrors.FromK8sError(err, ServiceBindingResourceType),
+					"Unable to use app. Ensure that the app exists and you have access to it.",
+					apierrors.ForbiddenError{},
+					apierrors.NotFoundError{},
+				)
+		}
 	}
 
 	err = userClient.Create(ctx, cfServiceBinding)
@@ -227,7 +239,7 @@ func (r *ServiceBindingRepo) GetServiceBinding(ctx context.Context, authInfo aut
 func serviceBindingToRecord(binding korifiv1alpha1.CFServiceBinding) ServiceBindingRecord {
 	return ServiceBindingRecord{
 		GUID:                binding.Name,
-		Type:                ServiceBindingTypeApp,
+		Type:                binding.Labels[korifiv1alpha1.CFBindingTypeLabelKey],
 		Name:                binding.Spec.DisplayName,
 		AppGUID:             binding.Spec.AppRef.Name,
 		ServiceInstanceGUID: binding.Spec.Service.Name,
@@ -358,10 +370,15 @@ func (r *ServiceBindingRepo) ListServiceBindings(ctx context.Context, authInfo a
 		return []ServiceBindingRecord{}, apierrors.NewUnprocessableEntityError(err, "invalid label selector")
 	}
 
+	typeSelector, err := labels.Parse(fmt.Sprintf("%s=%s", korifiv1alpha1.CFBindingTypeLabelKey, message.Type))
+	if err != nil {
+		return []ServiceBindingRecord{}, apierrors.NewUnprocessableEntityError(err, "invalid binding type")
+	}
+
 	var serviceBindings []korifiv1alpha1.CFServiceBinding
 	for _, ns := range authorizedSpaceNamespaces.Collect() {
 		serviceBindingList := new(korifiv1alpha1.CFServiceBindingList)
-		err = userClient.List(ctx, serviceBindingList, client.InNamespace(ns), &client.ListOptions{LabelSelector: labelSelector})
+		err = userClient.List(ctx, serviceBindingList, client.InNamespace(ns), &client.ListOptions{LabelSelector: labelSelector}, &client.ListOptions{LabelSelector: typeSelector})
 		if k8serrors.IsForbidden(err) {
 			continue
 		}

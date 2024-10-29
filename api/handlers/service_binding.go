@@ -53,22 +53,69 @@ func (h *ServiceBinding) create(r *http.Request) (*routing.Response, error) {
 	logger := logr.FromContextOrDiscard(r.Context()).WithName("handlers.service-binding.create")
 
 	var payload payloads.ServiceBindingCreate
-	if err := h.requestValidator.DecodeAndValidateJSONPayload(r, &payload); err != nil {
+	var serviceBinding repositories.ServiceBindingRecord
+	var err error
+
+	if err = h.requestValidator.DecodeAndValidateJSONPayload(r, &payload); err != nil {
 		return nil, apierrors.LogAndReturn(logger, err, "failed to decode payload")
 	}
 
-	app, err := h.appRepo.GetApp(r.Context(), authInfo, payload.Relationships.App.Data.GUID)
-	if err != nil {
-		return nil, apierrors.LogAndReturn(logger, apierrors.ForbiddenAsNotFound(err), "failed to get "+repositories.AppResourceType)
+	if payload.Type == korifiv1alpha1.CFServiceBindingTypeApp {
+		serviceBinding, err = h.createTypeApp(r.Context(), authInfo, payload, logger)
+		if err != nil {
+			return nil, err
+		}
+
+	} else {
+		serviceBinding, err = h.createTypeKey(r.Context(), authInfo, payload, logger)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	serviceInstance, err := h.serviceInstanceRepo.GetServiceInstance(r.Context(), authInfo, payload.Relationships.ServiceInstance.Data.GUID)
+	return routing.NewResponse(http.StatusCreated).WithBody(presenter.ForServiceBinding(serviceBinding, h.serverURL)), nil
+
+	// app, err := h.appRepo.GetApp(r.Context(), authInfo, payload.Relationships.App.Data.GUID)
+	// if err != nil {
+	// 	return nil, apierrors.LogAndReturn(logger, apierrors.ForbiddenAsNotFound(err), "failed to get "+repositories.AppResourceType)
+	// }
+
+	// serviceInstance, err := h.serviceInstanceRepo.GetServiceInstance(r.Context(), authInfo, payload.Relationships.ServiceInstance.Data.GUID)
+	// if err != nil {
+	// 	return nil, apierrors.LogAndReturn(logger, apierrors.ForbiddenAsNotFound(err), "failed to get "+repositories.ServiceInstanceResourceType)
+	// }
+
+	// if app.SpaceGUID != serviceInstance.SpaceGUID {
+	// 	return nil, apierrors.LogAndReturn(
+	// 		logger,
+	// 		apierrors.NewUnprocessableEntityError(nil, "The service instance and the app are in different spaces"),
+	// 		"App and ServiceInstance in different spaces", "App GUID", app.GUID,
+	// 		"ServiceInstance GUID", serviceInstance.GUID,
+	// 	)
+	// }
+
+	// ctx := logr.NewContext(r.Context(), logger.WithValues("app", app.GUID, "service-instance", serviceInstance.GUID))
+
+	// if serviceInstance.Type == korifiv1alpha1.ManagedType {
+	// 	return h.createManagedServiceBinding(ctx, authInfo, payload, app)
+	// }
+
+	// return h.createUserProvidedServiceBinding(ctx, authInfo, payload, app)
+}
+
+func (h *ServiceBinding) createTypeApp(ctx context.Context, authInfo authorization.Info, payload payloads.ServiceBindingCreate, logger logr.Logger) (repositories.ServiceBindingRecord, error) {
+	app, err := h.appRepo.GetApp(ctx, authInfo, payload.Relationships.App.Data.GUID)
 	if err != nil {
-		return nil, apierrors.LogAndReturn(logger, apierrors.ForbiddenAsNotFound(err), "failed to get "+repositories.ServiceInstanceResourceType)
+		return repositories.ServiceBindingRecord{}, apierrors.LogAndReturn(logger, apierrors.ForbiddenAsNotFound(err), "failed to get "+repositories.AppResourceType)
+	}
+
+	serviceInstance, err := h.serviceInstanceRepo.GetServiceInstance(ctx, authInfo, payload.Relationships.ServiceInstance.Data.GUID)
+	if err != nil {
+		return repositories.ServiceBindingRecord{}, apierrors.LogAndReturn(logger, apierrors.ForbiddenAsNotFound(err), "failed to get "+repositories.ServiceInstanceResourceType)
 	}
 
 	if app.SpaceGUID != serviceInstance.SpaceGUID {
-		return nil, apierrors.LogAndReturn(
+		return repositories.ServiceBindingRecord{}, apierrors.LogAndReturn(
 			logger,
 			apierrors.NewUnprocessableEntityError(nil, "The service instance and the app are in different spaces"),
 			"App and ServiceInstance in different spaces", "App GUID", app.GUID,
@@ -76,13 +123,26 @@ func (h *ServiceBinding) create(r *http.Request) (*routing.Response, error) {
 		)
 	}
 
-	ctx := logr.NewContext(r.Context(), logger.WithValues("app", app.GUID, "service-instance", serviceInstance.GUID))
-
-	if serviceInstance.Type == korifiv1alpha1.ManagedType {
-		return h.createManagedServiceBinding(ctx, authInfo, payload, app)
+	serviceBinding, err := h.serviceBindingRepo.CreateServiceBinding(ctx, authInfo, payload.ToMessage(app.SpaceGUID))
+	if err != nil {
+		return repositories.ServiceBindingRecord{}, apierrors.LogAndReturn(logger, err, "failed to create ServiceBinding", "App GUID", app.GUID, "ServiceInstance GUID", serviceInstance.GUID)
 	}
 
-	return h.createUserProvidedServiceBinding(ctx, authInfo, payload, app)
+	return serviceBinding, nil
+}
+
+func (h *ServiceBinding) createTypeKey(ctx context.Context, authInfo authorization.Info, payload payloads.ServiceBindingCreate, logger logr.Logger) (repositories.ServiceBindingRecord, error) {
+	serviceInstance, err := h.serviceInstanceRepo.GetServiceInstance(ctx, authInfo, payload.Relationships.ServiceInstance.Data.GUID)
+	if err != nil {
+		return repositories.ServiceBindingRecord{}, apierrors.LogAndReturn(logger, apierrors.ForbiddenAsNotFound(err), "failed to get "+repositories.ServiceInstanceResourceType)
+	}
+
+	serviceBinding, err := h.serviceBindingRepo.CreateServiceBinding(ctx, authInfo, payload.ToMessage(serviceInstance.SpaceGUID))
+	if err != nil {
+		return repositories.ServiceBindingRecord{}, apierrors.LogAndReturn(logger, err, "failed to create ServiceBinding", "ServiceInstance GUID", serviceInstance.GUID)
+	}
+
+	return serviceBinding, nil
 }
 
 func (h *ServiceBinding) createUserProvidedServiceBinding(
