@@ -95,7 +95,6 @@ type ServiceBindingDetailsRecord struct {
 
 type CreateServiceBindingMessage struct {
 	Name                *string
-	Type                string
 	ServiceInstanceGUID string
 	AppGUID             string
 	SpaceGUID           string
@@ -123,10 +122,7 @@ func (m CreateServiceBindingMessage) toCFServiceBinding() *korifiv1alpha1.CFServ
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      guid,
 			Namespace: m.SpaceGUID,
-			Labels: map[string]string{
-				LabelServiceBindingProvisionedService: "true",
-				korifiv1alpha1.CFBindingTypeLabelKey:  m.Type,
-			},
+			Labels:    map[string]string{LabelServiceBindingProvisionedService: "true"},
 		},
 		Spec: korifiv1alpha1.CFServiceBindingSpec{
 			DisplayName: m.Name,
