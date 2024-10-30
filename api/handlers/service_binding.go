@@ -74,33 +74,6 @@ func (h *ServiceBinding) create(r *http.Request) (*routing.Response, error) {
 	}
 
 	return routing.NewResponse(http.StatusCreated).WithBody(presenter.ForServiceBinding(serviceBinding, h.serverURL)), nil
-
-	// app, err := h.appRepo.GetApp(r.Context(), authInfo, payload.Relationships.App.Data.GUID)
-	// if err != nil {
-	// 	return nil, apierrors.LogAndReturn(logger, apierrors.ForbiddenAsNotFound(err), "failed to get "+repositories.AppResourceType)
-	// }
-
-	// serviceInstance, err := h.serviceInstanceRepo.GetServiceInstance(r.Context(), authInfo, payload.Relationships.ServiceInstance.Data.GUID)
-	// if err != nil {
-	// 	return nil, apierrors.LogAndReturn(logger, apierrors.ForbiddenAsNotFound(err), "failed to get "+repositories.ServiceInstanceResourceType)
-	// }
-
-	// if app.SpaceGUID != serviceInstance.SpaceGUID {
-	// 	return nil, apierrors.LogAndReturn(
-	// 		logger,
-	// 		apierrors.NewUnprocessableEntityError(nil, "The service instance and the app are in different spaces"),
-	// 		"App and ServiceInstance in different spaces", "App GUID", app.GUID,
-	// 		"ServiceInstance GUID", serviceInstance.GUID,
-	// 	)
-	// }
-
-	// ctx := logr.NewContext(r.Context(), logger.WithValues("app", app.GUID, "service-instance", serviceInstance.GUID))
-
-	// if serviceInstance.Type == korifiv1alpha1.ManagedType {
-	// 	return h.createManagedServiceBinding(ctx, authInfo, payload, app)
-	// }
-
-	// return h.createUserProvidedServiceBinding(ctx, authInfo, payload, app)
 }
 
 func (h *ServiceBinding) createTypeApp(ctx context.Context, authInfo authorization.Info, payload payloads.ServiceBindingCreate, logger logr.Logger) (repositories.ServiceBindingRecord, error) {
