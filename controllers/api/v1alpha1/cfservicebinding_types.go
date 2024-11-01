@@ -27,6 +27,9 @@ const (
 	BindingFailedCondition    = "BindingFailed"
 	BindingRequestedCondition = "BindingRequested"
 
+	CFServiceBindingTypeKey = "key"
+	CFServiceBindingTypeApp = "app"
+
 	ServiceInstanceTypeAnnotationKey = "korifi.cloudfoundry.org/service-instance-type"
 )
 

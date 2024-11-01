@@ -26,7 +26,7 @@ func (p ServiceBindingCreate) ToMessage(spaceGUID string) repositories.CreateSer
 
 func (p ServiceBindingCreate) Validate() error {
 	return jellidation.ValidateStruct(&p,
-		jellidation.Field(&p.Type, validation.OneOf("app")),
+		jellidation.Field(&p.Type, validation.OneOf("app", "key")),
 		jellidation.Field(&p.Relationships, jellidation.NotNil),
 	)
 }
@@ -38,7 +38,6 @@ type ServiceBindingRelationships struct {
 
 func (r ServiceBindingRelationships) Validate() error {
 	return jellidation.ValidateStruct(&r,
-		jellidation.Field(&r.App, jellidation.NotNil),
 		jellidation.Field(&r.ServiceInstance, jellidation.NotNil),
 	)
 }
