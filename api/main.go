@@ -200,6 +200,8 @@ func main() {
 		userClientFactory,
 		nsPermissions,
 		conditions.NewConditionAwaiter[*korifiv1alpha1.CFServiceInstance, korifiv1alpha1.CFServiceInstance, korifiv1alpha1.CFServiceInstanceList](conditionTimeout),
+		repositories.NewServiceInstanceSorter(),
+		cfg.RootNamespace,
 	)
 	serviceBindingRepo := repositories.NewServiceBindingRepo(
 		namespaceRetriever,
