@@ -93,6 +93,29 @@ var _ = Describe("ServiceBinding", func() {
 			requestValidator.DecodeAndValidateJSONPayloadStub = decodeAndValidatePayloadStub(&payload)
 		})
 
+		When("creating service binding of type key", func() {
+			BeforeEach(func() {
+				payload = payloads.ServiceBindingCreate{
+					Relationships: &payloads.ServiceBindingRelationships{
+						App: &payloads.Relationship{
+							Data: &payloads.RelationshipData{
+								GUID: "app-guid",
+							},
+						},
+						ServiceInstance: &payloads.Relationship{
+							Data: &payloads.RelationshipData{
+								GUID: "service-instance-guid",
+							},
+						},
+					},
+					Type: "key",
+				}
+				requestValidator.DecodeAndValidateJSONPayloadStub = decodeAndValidatePayloadStub(&payload)
+
+				serviceInstanceRepo.GetServiceInstanceReturns(repositories.ServiceInstanceRecord{SpaceGUID: "spage-guid"}, nil)
+			})
+		})
+
 		It("validates the payload", func() {
 			Expect(requestValidator.DecodeAndValidateJSONPayloadCallCount()).To(Equal(1))
 			actualReq, _ := requestValidator.DecodeAndValidateJSONPayloadArgsForCall(0)
