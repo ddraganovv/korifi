@@ -9,6 +9,7 @@ import (
 
 	apierrors "code.cloudfoundry.org/korifi/api/errors"
 	"code.cloudfoundry.org/korifi/api/repositories"
+	"code.cloudfoundry.org/korifi/api/repositories/fake"
 	"code.cloudfoundry.org/korifi/api/repositories/fakeawaiter"
 	korifiv1alpha1 "code.cloudfoundry.org/korifi/controllers/api/v1alpha1"
 	"code.cloudfoundry.org/korifi/model"
@@ -21,6 +22,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gstruct"
+	gomega_types "github.com/onsi/gomega/types"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -37,6 +39,7 @@ var _ = Describe("ServiceInstanceRepository", func() {
 			korifiv1alpha1.CFServiceInstanceList,
 			*korifiv1alpha1.CFServiceInstanceList,
 		]
+		sorter *fake.ServiceInstanceSorter
 
 		org                 *korifiv1alpha1.CFOrg
 		space               *korifiv1alpha1.CFSpace
@@ -50,7 +53,12 @@ var _ = Describe("ServiceInstanceRepository", func() {
 			korifiv1alpha1.CFServiceInstanceList,
 			*korifiv1alpha1.CFServiceInstanceList,
 		]{}
-		serviceInstanceRepo = repositories.NewServiceInstanceRepo(namespaceRetriever, userClientFactory, nsPerms, conditionAwaiter)
+		sorter = new(fake.ServiceInstanceSorter)
+		sorter.SortStub = func(records []repositories.ServiceInstanceRecord, _ string) []repositories.ServiceInstanceRecord {
+			return records
+		}
+
+		serviceInstanceRepo = repositories.NewServiceInstanceRepo(namespaceRetriever, userClientFactory, nsPerms, conditionAwaiter, sorter, rootNamespace)
 
 		org = createOrgWithCleanup(ctx, uuid.NewString())
 		space = createSpaceWithCleanup(ctx, org.Name, uuid.NewString())
@@ -146,16 +154,30 @@ var _ = Describe("ServiceInstanceRepository", func() {
 
 	Describe("CreateManagedServiceInstance", func() {
 		var (
+			servicePlan                  *korifiv1alpha1.CFServicePlan
 			serviceInstanceCreateMessage repositories.CreateManagedSIMessage
 			record                       repositories.ServiceInstanceRecord
 			createErr                    error
 		)
 
 		BeforeEach(func() {
+			servicePlan = &korifiv1alpha1.CFServicePlan{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: rootNamespace,
+					Name:      uuid.NewString(),
+				},
+				Spec: korifiv1alpha1.CFServicePlanSpec{
+					Visibility: korifiv1alpha1.ServicePlanVisibility{
+						Type: korifiv1alpha1.PublicServicePlanVisibilityType,
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, servicePlan)).To(Succeed())
+
 			serviceInstanceCreateMessage = repositories.CreateManagedSIMessage{
 				Name:      serviceInstanceName,
 				SpaceGUID: space.Name,
-				PlanGUID:  "plan-guid",
+				PlanGUID:  servicePlan.Name,
 				Tags:      []string{"foo", "bar"},
 				Parameters: map[string]any{
 					"p1": map[string]any{
@@ -188,7 +210,7 @@ var _ = Describe("ServiceInstanceRepository", func() {
 				Expect(record.Tags).To(ConsistOf([]string{"foo", "bar"}))
 				Expect(record.SecretName).To(BeEmpty())
 				Expect(record.Relationships()).To(Equal(map[string]string{
-					"service_plan": "plan-guid",
+					"service_plan": servicePlan.Name,
 					"space":        space.Name,
 				}))
 				Expect(record.CreatedAt).To(BeTemporally("~", time.Now(), timeCheckThreshold))
@@ -210,7 +232,7 @@ var _ = Describe("ServiceInstanceRepository", func() {
 				Expect(cfServiceInstance.Spec.SecretName).To(BeEmpty())
 				Expect(cfServiceInstance.Spec.Type).To(BeEquivalentTo(korifiv1alpha1.ManagedType))
 				Expect(cfServiceInstance.Spec.Tags).To(ConsistOf("foo", "bar"))
-				Expect(cfServiceInstance.Spec.PlanGUID).To(Equal("plan-guid"))
+				Expect(cfServiceInstance.Spec.PlanGUID).To(Equal(servicePlan.Name))
 				Expect(cfServiceInstance.Spec.Parameters).NotTo(BeNil())
 
 				actualParams := map[string]any{}
@@ -220,6 +242,66 @@ var _ = Describe("ServiceInstanceRepository", func() {
 						"p11": "v11",
 					},
 				}))
+			})
+
+			When("the service plan visibility type is admin", func() {
+				BeforeEach(func() {
+					Expect(k8s.PatchResource(ctx, k8sClient, servicePlan, func() {
+						servicePlan.Spec.Visibility.Type = korifiv1alpha1.AdminServicePlanVisibilityType
+					})).To(Succeed())
+				})
+
+				It("returns unprocessable entity error", func() {
+					Expect(createErr).To(BeAssignableToTypeOf(apierrors.UnprocessableEntityError{}))
+				})
+			})
+
+			When("the service plan visibility type is organization", func() {
+				BeforeEach(func() {
+					Expect(k8s.PatchResource(ctx, k8sClient, servicePlan, func() {
+						servicePlan.Spec.Visibility.Type = korifiv1alpha1.OrganizationServicePlanVisibilityType
+					})).To(Succeed())
+				})
+
+				It("returns unprocessable entity error", func() {
+					Expect(createErr).To(BeAssignableToTypeOf(apierrors.UnprocessableEntityError{}))
+				})
+
+				When("the plan is enabled for the current organization", func() {
+					BeforeEach(func() {
+						Expect(k8s.PatchResource(ctx, k8sClient, servicePlan, func() {
+							servicePlan.Spec.Visibility.Organizations = append(servicePlan.Spec.Visibility.Organizations, org.Name)
+						})).To(Succeed())
+					})
+
+					It("succeeds", func() {
+						Expect(createErr).NotTo(HaveOccurred())
+					})
+
+					When("the space does not exist", func() {
+						BeforeEach(func() {
+							serviceInstanceCreateMessage.SpaceGUID = "does-not-exist"
+						})
+
+						It("returns unprocessable entity error", func() {
+							var unprocessableEntityErr apierrors.UnprocessableEntityError
+							Expect(errors.As(createErr, &unprocessableEntityErr)).To(BeTrue())
+							Expect(unprocessableEntityErr).To(MatchError(ContainSubstring("does-not-exist")))
+						})
+					})
+				})
+			})
+
+			When("the service plan does not exist", func() {
+				BeforeEach(func() {
+					serviceInstanceCreateMessage.PlanGUID = "does-not-exist"
+				})
+
+				It("returns unprocessable entity error", func() {
+					var unprocessableEntityErr apierrors.UnprocessableEntityError
+					Expect(errors.As(createErr, &unprocessableEntityErr)).To(BeTrue())
+					Expect(unprocessableEntityErr).To(MatchError(ContainSubstring("does-not-exist")))
+				})
 			})
 		})
 	})
@@ -570,6 +652,7 @@ var _ = Describe("ServiceInstanceRepository", func() {
 				Spec: korifiv1alpha1.CFServiceInstanceSpec{
 					DisplayName: "service-instance-1",
 					Type:        korifiv1alpha1.UserProvidedType,
+					PlanGUID:    "plan-1",
 				},
 			}
 			Expect(k8sClient.Create(ctx, cfServiceInstance1)).To(Succeed())
@@ -582,6 +665,7 @@ var _ = Describe("ServiceInstanceRepository", func() {
 				Spec: korifiv1alpha1.CFServiceInstanceSpec{
 					DisplayName: "service-instance-2",
 					Type:        korifiv1alpha1.UserProvidedType,
+					PlanGUID:    "plan-2",
 				},
 			}
 			Expect(k8sClient.Create(ctx, cfServiceInstance2)).To(Succeed())
@@ -594,6 +678,7 @@ var _ = Describe("ServiceInstanceRepository", func() {
 				Spec: korifiv1alpha1.CFServiceInstanceSpec{
 					DisplayName: "service-instance-3",
 					Type:        korifiv1alpha1.UserProvidedType,
+					PlanGUID:    "plan-3",
 				},
 			}
 			Expect(k8sClient.Create(ctx, cfServiceInstance3)).To(Succeed())
@@ -627,7 +712,7 @@ var _ = Describe("ServiceInstanceRepository", func() {
 				},
 			})).To(Succeed())
 
-			filters = repositories.ListServiceInstanceMessage{}
+			filters = repositories.ListServiceInstanceMessage{OrderBy: "foo"}
 		})
 
 		JustBeforeEach(func() {
@@ -648,6 +733,17 @@ var _ = Describe("ServiceInstanceRepository", func() {
 			It("returns the service instances from the allowed namespaces", func() {
 				Expect(listErr).NotTo(HaveOccurred())
 				Expect(serviceInstanceList).To(ConsistOf(
+					MatchFields(IgnoreExtras, Fields{"GUID": Equal(cfServiceInstance1.Name)}),
+					MatchFields(IgnoreExtras, Fields{"GUID": Equal(cfServiceInstance2.Name)}),
+					MatchFields(IgnoreExtras, Fields{"GUID": Equal(cfServiceInstance3.Name)}),
+				))
+			})
+
+			It("sort the service instances", func() {
+				Expect(sorter.SortCallCount()).To(Equal(1))
+				sortedServiceInstances, field := sorter.SortArgsForCall(0)
+				Expect(field).To(Equal("foo"))
+				Expect(sortedServiceInstances).To(ConsistOf(
 					MatchFields(IgnoreExtras, Fields{"GUID": Equal(cfServiceInstance1.Name)}),
 					MatchFields(IgnoreExtras, Fields{"GUID": Equal(cfServiceInstance2.Name)}),
 					MatchFields(IgnoreExtras, Fields{"GUID": Equal(cfServiceInstance3.Name)}),
@@ -751,6 +847,22 @@ var _ = Describe("ServiceInstanceRepository", func() {
 					It("returns an error", func() {
 						Expect(listErr).To(matchers.WrapErrorAssignableToTypeOf(apierrors.UnprocessableEntityError{}))
 					})
+				})
+			})
+
+			When("filtering by plan guids", func() {
+				BeforeEach(func() {
+					filters = repositories.ListServiceInstanceMessage{
+						PlanGUIDs: []string{"plan-1", "plan-3"},
+					}
+				})
+
+				It("returns only records for the ServiceInstances within the matching plans", func() {
+					Expect(listErr).NotTo(HaveOccurred())
+					Expect(serviceInstanceList).To(ConsistOf(
+						MatchFields(IgnoreExtras, Fields{"GUID": Equal(cfServiceInstance1.Name)}),
+						MatchFields(IgnoreExtras, Fields{"GUID": Equal(cfServiceInstance3.Name)}),
+					))
 				})
 			})
 		})
@@ -914,3 +1026,45 @@ var _ = Describe("ServiceInstanceRepository", func() {
 		})
 	})
 })
+
+var _ = DescribeTable("ServiceInstanceSorter",
+	func(s1, s2 repositories.ServiceInstanceRecord, field string, match gomega_types.GomegaMatcher) {
+		Expect(repositories.ServiceInstanceComparator(field)(s1, s2)).To(match)
+	},
+	Entry("created_at",
+		repositories.ServiceInstanceRecord{CreatedAt: time.UnixMilli(1)},
+		repositories.ServiceInstanceRecord{CreatedAt: time.UnixMilli(2)},
+		"created_at",
+		BeNumerically("<", 0),
+	),
+	Entry("-created_at",
+		repositories.ServiceInstanceRecord{CreatedAt: time.UnixMilli(1)},
+		repositories.ServiceInstanceRecord{CreatedAt: time.UnixMilli(2)},
+		"-created_at",
+		BeNumerically(">", 0),
+	),
+	Entry("updated_at",
+		repositories.ServiceInstanceRecord{UpdatedAt: tools.PtrTo(time.UnixMilli(1))},
+		repositories.ServiceInstanceRecord{UpdatedAt: tools.PtrTo(time.UnixMilli(2))},
+		"updated_at",
+		BeNumerically("<", 0),
+	),
+	Entry("-updated_at",
+		repositories.ServiceInstanceRecord{UpdatedAt: tools.PtrTo(time.UnixMilli(1))},
+		repositories.ServiceInstanceRecord{UpdatedAt: tools.PtrTo(time.UnixMilli(2))},
+		"-updated_at",
+		BeNumerically(">", 0),
+	),
+	Entry("name",
+		repositories.ServiceInstanceRecord{Name: "first-instance"},
+		repositories.ServiceInstanceRecord{Name: "second-instance"},
+		"name",
+		BeNumerically("<", 0),
+	),
+	Entry("-name",
+		repositories.ServiceInstanceRecord{Name: "first-instance"},
+		repositories.ServiceInstanceRecord{Name: "second-instance"},
+		"-name",
+		BeNumerically(">", 0),
+	),
+)

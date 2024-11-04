@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"code.cloudfoundry.org/korifi/api/authorization"
 	apierrors "code.cloudfoundry.org/korifi/api/errors"
+	"code.cloudfoundry.org/korifi/api/repositories/compare"
 	korifiv1alpha1 "code.cloudfoundry.org/korifi/controllers/api/v1alpha1"
 	"code.cloudfoundry.org/korifi/model"
 	"code.cloudfoundry.org/korifi/tools"
@@ -43,6 +45,47 @@ type ServiceInstanceRepo struct {
 	userClientFactory    authorization.UserK8sClientFactory
 	namespacePermissions *authorization.NamespacePermissions
 	awaiter              Awaiter[*korifiv1alpha1.CFServiceInstance]
+	sorter               ServiceInstanceSorter
+	rootNamespace        string
+}
+
+//counterfeiter:generate -o fake -fake-name ServiceInstanceSorter . ServiceInstanceSorter
+type ServiceInstanceSorter interface {
+	Sort(records []ServiceInstanceRecord, order string) []ServiceInstanceRecord
+}
+
+type serviceInstanceSorter struct {
+	sorter *compare.Sorter[ServiceInstanceRecord]
+}
+
+func NewServiceInstanceSorter() *serviceInstanceSorter {
+	return &serviceInstanceSorter{
+		sorter: compare.NewSorter(ServiceInstanceComparator),
+	}
+}
+
+func (s *serviceInstanceSorter) Sort(records []ServiceInstanceRecord, order string) []ServiceInstanceRecord {
+	return s.sorter.Sort(records, order)
+}
+
+func ServiceInstanceComparator(fieldName string) func(ServiceInstanceRecord, ServiceInstanceRecord) int {
+	return func(s1, s2 ServiceInstanceRecord) int {
+		switch fieldName {
+		case "created_at":
+			return tools.CompareTimePtr(&s1.CreatedAt, &s2.CreatedAt)
+		case "-created_at":
+			return tools.CompareTimePtr(&s2.CreatedAt, &s1.CreatedAt)
+		case "updated_at":
+			return tools.CompareTimePtr(s1.UpdatedAt, s2.UpdatedAt)
+		case "-updated_at":
+			return tools.CompareTimePtr(s2.UpdatedAt, s1.UpdatedAt)
+		case "name":
+			return strings.Compare(s1.Name, s2.Name)
+		case "-name":
+			return strings.Compare(s2.Name, s1.Name)
+		}
+		return 0
+	}
 }
 
 func NewServiceInstanceRepo(
@@ -50,12 +93,16 @@ func NewServiceInstanceRepo(
 	userClientFactory authorization.UserK8sClientFactory,
 	namespacePermissions *authorization.NamespacePermissions,
 	awaiter Awaiter[*korifiv1alpha1.CFServiceInstance],
+	sorter ServiceInstanceSorter,
+	rootNamespace string,
 ) *ServiceInstanceRepo {
 	return &ServiceInstanceRepo{
 		namespaceRetriever:   namespaceRetriever,
 		userClientFactory:    userClientFactory,
 		namespacePermissions: namespacePermissions,
 		awaiter:              awaiter,
+		sorter:               sorter,
+		rootNamespace:        rootNamespace,
 	}
 }
 
@@ -102,11 +149,14 @@ type ListServiceInstanceMessage struct {
 	SpaceGUIDs    []string
 	GUIDs         []string
 	LabelSelector string
+	OrderBy       string
+	PlanGUIDs     []string
 }
 
 func (m *ListServiceInstanceMessage) matches(serviceInstance korifiv1alpha1.CFServiceInstance) bool {
 	return tools.EmptyOrContains(m.Names, serviceInstance.Spec.DisplayName) &&
-		tools.EmptyOrContains(m.GUIDs, serviceInstance.Name)
+		tools.EmptyOrContains(m.GUIDs, serviceInstance.Name) &&
+		tools.EmptyOrContains(m.PlanGUIDs, serviceInstance.Spec.PlanGUID)
 }
 
 func (m *ListServiceInstanceMessage) matchesNamespace(ns string) bool {
@@ -185,6 +235,15 @@ func (r *ServiceInstanceRepo) CreateManagedServiceInstance(ctx context.Context, 
 		return ServiceInstanceRecord{}, fmt.Errorf("failed to build user client: %w", err)
 	}
 
+	planVisible, err := r.servicePlanVisible(ctx, userClient, message.PlanGUID, message.SpaceGUID)
+	if err != nil {
+		return ServiceInstanceRecord{}, apierrors.NewUnprocessableEntityError(err, "Invalid service plan. Ensure that the service plan exists, is available, and you have access to it.")
+	}
+
+	if !planVisible {
+		return ServiceInstanceRecord{}, apierrors.NewUnprocessableEntityError(nil, "Invalid service plan. Ensure that the service plan exists, is available, and you have access to it.")
+	}
+
 	parameterBytes, err := json.Marshal(message.Parameters)
 	if err != nil {
 		return ServiceInstanceRecord{}, fmt.Errorf("failed to marshal parameters: %w", err)
@@ -213,6 +272,34 @@ func (r *ServiceInstanceRepo) CreateManagedServiceInstance(ctx context.Context, 
 	}
 
 	return cfServiceInstanceToRecord(*cfServiceInstance), nil
+}
+
+func (r *ServiceInstanceRepo) servicePlanVisible(ctx context.Context, userClient client.Client, planGUID string, spaceGUID string) (bool, error) {
+	servicePlan := &korifiv1alpha1.CFServicePlan{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      planGUID,
+			Namespace: r.rootNamespace,
+		},
+	}
+	err := userClient.Get(ctx, client.ObjectKeyFromObject(servicePlan), servicePlan)
+	if err != nil {
+		return false, err
+	}
+
+	if servicePlan.Spec.Visibility.Type == korifiv1alpha1.PublicServicePlanVisibilityType {
+		return true, nil
+	}
+
+	if servicePlan.Spec.Visibility.Type == korifiv1alpha1.AdminServicePlanVisibilityType {
+		return false, nil
+	}
+
+	orgGUID, err := r.namespaceRetriever.NamespaceFor(ctx, spaceGUID, SpaceResourceType)
+	if err != nil {
+		return false, err
+	}
+
+	return slices.Contains(servicePlan.Spec.Visibility.Organizations, orgGUID), nil
 }
 
 func (r *ServiceInstanceRepo) PatchServiceInstance(ctx context.Context, authInfo authorization.Info, message PatchServiceInstanceMessage) (ServiceInstanceRecord, error) {
@@ -347,7 +434,7 @@ func (r *ServiceInstanceRepo) ListServiceInstances(ctx context.Context, authInfo
 	}
 
 	filteredServiceInstances := itx.FromSlice(serviceInstances).Filter(message.matches)
-	return slices.Collect(it.Map(filteredServiceInstances, cfServiceInstanceToRecord)), nil
+	return r.sorter.Sort(slices.Collect(it.Map(filteredServiceInstances, cfServiceInstanceToRecord)), message.OrderBy), nil
 }
 
 func (r *ServiceInstanceRepo) GetServiceInstance(ctx context.Context, authInfo authorization.Info, guid string) (ServiceInstanceRecord, error) {
