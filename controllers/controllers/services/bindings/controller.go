@@ -139,10 +139,14 @@ func (r *Reconciler) appToServiceBindings(ctx context.Context, o client.Object) 
 
 //+kubebuilder:rbac:groups=korifi.cloudfoundry.org,resources=cfservicebindings,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=korifi.cloudfoundry.org,resources=cfservicebindings/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=korifi.cloudfoundry.org,resources=cfservicebindings/finalizers,verbs=update
 //+kubebuilder:rbac:groups=servicebinding.io,resources=servicebindings,verbs=get;list;create;update;patch;watch
 
 func (r *Reconciler) ReconcileResource(ctx context.Context, cfServiceBinding *korifiv1alpha1.CFServiceBinding) (ctrl.Result, error) {
 	log := logr.FromContextOrDiscard(ctx)
+
+	cfServiceBinding.Status.ObservedGeneration = cfServiceBinding.Generation
+	log.V(1).Info("set observed generation", "generation", cfServiceBinding.Status.ObservedGeneration)
 
 	cfServiceInstance := new(korifiv1alpha1.CFServiceInstance)
 	err := r.k8sClient.Get(ctx, types.NamespacedName{Name: cfServiceBinding.Spec.Service.Name, Namespace: cfServiceBinding.Namespace}, cfServiceInstance)
@@ -150,9 +154,6 @@ func (r *Reconciler) ReconcileResource(ctx context.Context, cfServiceBinding *ko
 		log.Info("service instance not found", "service-instance", cfServiceBinding.Spec.Service.Name, "error", err)
 		return ctrl.Result{}, err
 	}
-
-	cfServiceBinding.Status.ObservedGeneration = cfServiceBinding.Generation
-	log.V(1).Info("set observed generation", "generation", cfServiceBinding.Status.ObservedGeneration)
 
 	if cfServiceBinding.Annotations == nil {
 		cfServiceBinding.Annotations = map[string]string{}
@@ -165,9 +166,11 @@ func (r *Reconciler) ReconcileResource(ctx context.Context, cfServiceBinding *ko
 		return ctrl.Result{}, err
 	}
 
-	res, err := r.reconcileCredentialsSecrets(ctx, cfServiceInstance.Spec.Type, cfServiceBinding)
+	res, err := r.reconcileByType(ctx, cfServiceInstance, cfServiceBinding)
 	if needsRequeue(res, err) {
-		log.Error(err, "failed to reconcile binding credentials")
+		if err != nil {
+			log.Error(err, "failed to reconcile binding credentials")
+		}
 		return res, err
 	}
 
@@ -191,11 +194,15 @@ func (r *Reconciler) ReconcileResource(ctx context.Context, cfServiceBinding *ko
 	return ctrl.Result{}, nil
 }
 
-func (r *Reconciler) reconcileCredentialsSecrets(ctx context.Context, instanceType korifiv1alpha1.InstanceType, cfServiceBinding *korifiv1alpha1.CFServiceBinding) (ctrl.Result, error) {
-	if instanceType == korifiv1alpha1.UserProvidedType {
+func (r *Reconciler) reconcileByType(ctx context.Context, cfServiceInstance *korifiv1alpha1.CFServiceInstance, cfServiceBinding *korifiv1alpha1.CFServiceBinding) (ctrl.Result, error) {
+	if cfServiceInstance.Spec.Type == korifiv1alpha1.UserProvidedType {
 		return r.upsiCredentialsReconciler.ReconcileResource(ctx, cfServiceBinding)
 	}
 
+	if cfServiceBinding.Labels == nil {
+		cfServiceBinding.Labels = map[string]string{}
+	}
+	cfServiceBinding.Labels[korifiv1alpha1.PlanGUIDLabelKey] = cfServiceInstance.Spec.PlanGUID
 	return r.managedCredentialsReconciler.ReconcileResource(ctx, cfServiceBinding)
 }
 

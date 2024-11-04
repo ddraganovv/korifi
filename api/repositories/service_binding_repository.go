@@ -65,6 +65,7 @@ type ServiceBindingRecord struct {
 	Annotations         map[string]string
 	CreatedAt           time.Time
 	UpdatedAt           *time.Time
+	DeletedAt           *time.Time
 	LastOperation       ServiceBindingLastOperation
 	Ready               bool
 }
@@ -101,11 +102,13 @@ type ListServiceBindingsMessage struct {
 	ServiceInstanceGUIDs []string
 	LabelSelector        string
 	Type                 string
+	PlanGUIDs            []string
 }
 
 func (m *ListServiceBindingsMessage) matches(serviceBinding korifiv1alpha1.CFServiceBinding) bool {
 	return tools.EmptyOrContains(m.ServiceInstanceGUIDs, serviceBinding.Spec.Service.Name) &&
-		tools.EmptyOrContains(m.AppGUIDs, serviceBinding.Spec.AppRef.Name)
+		tools.EmptyOrContains(m.AppGUIDs, serviceBinding.Spec.AppRef.Name) &&
+		tools.EmptyOrContains(m.PlanGUIDs, serviceBinding.Labels[korifiv1alpha1.PlanGUIDLabelKey])
 }
 
 func (m CreateServiceBindingMessage) toCFServiceBinding() (*korifiv1alpha1.CFServiceBinding, error) {
@@ -251,6 +254,7 @@ func serviceBindingToRecord(binding korifiv1alpha1.CFServiceBinding) ServiceBind
 		Annotations:         binding.Annotations,
 		CreatedAt:           binding.CreationTimestamp.Time,
 		UpdatedAt:           getLastUpdatedTime(&binding),
+		DeletedAt:           golangTime(binding.DeletionTimestamp),
 		LastOperation:       serviceBindingRecordLastOperation(binding),
 		Ready:               isBindingReady(binding),
 	}
@@ -354,6 +358,14 @@ func (r *ServiceBindingRepo) GetState(ctx context.Context, authInfo authorizatio
 	}
 
 	return model.CFResourceStateUnknown, nil
+}
+
+func (r *ServiceBindingRepo) GetDeletedAt(ctx context.Context, authInfo authorization.Info, bindingGUID string) (*time.Time, error) {
+	serviceBinding, err := r.GetServiceBinding(ctx, authInfo, bindingGUID)
+	if err != nil {
+		return nil, err
+	}
+	return serviceBinding.DeletedAt, nil
 }
 
 // nolint:dupl
