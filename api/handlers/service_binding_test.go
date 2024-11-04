@@ -95,24 +95,39 @@ var _ = Describe("ServiceBinding", func() {
 
 		When("creating service binding of type key", func() {
 			BeforeEach(func() {
-				payload = payloads.ServiceBindingCreate{
-					Relationships: &payloads.ServiceBindingRelationships{
-						App: &payloads.Relationship{
-							Data: &payloads.RelationshipData{
-								GUID: "app-guid",
-							},
-						},
-						ServiceInstance: &payloads.Relationship{
-							Data: &payloads.RelationshipData{
-								GUID: "service-instance-guid",
-							},
-						},
-					},
+				serviceBindingRepo.CreateServiceBindingReturns(repositories.ServiceBindingRecord{
 					Type: "key",
-				}
-				requestValidator.DecodeAndValidateJSONPayloadStub = decodeAndValidatePayloadStub(&payload)
+				}, nil)
+			})
 
-				serviceInstanceRepo.GetServiceInstanceReturns(repositories.ServiceInstanceRecord{SpaceGUID: "spage-guid"}, nil)
+			It("creates service binding of type key", func() {
+				Expect(serviceInstanceRepo.GetServiceInstanceCallCount()).To(Equal(1))
+				Expect(serviceBindingRepo.CreateServiceBindingCallCount()).To(Equal(1))
+
+				Expect(rr).To(HaveHTTPStatus(http.StatusCreated))
+				Expect(rr).To(HaveHTTPHeaderWithValue("Content-Type", "application/json"))
+				Expect(rr).To(HaveHTTPBody(SatisfyAll(
+					MatchJSONPath("$.type", "key"),
+				)))
+			})
+		})
+
+		When("creating service binding of type app", func() {
+			BeforeEach(func() {
+				serviceBindingRepo.CreateServiceBindingReturns(repositories.ServiceBindingRecord{
+					Type: "app",
+				}, nil)
+			})
+
+			It("creates service binding of type app", func() {
+				Expect(serviceInstanceRepo.GetServiceInstanceCallCount()).To(Equal(1))
+				Expect(serviceBindingRepo.CreateServiceBindingCallCount()).To(Equal(1))
+
+				Expect(rr).To(HaveHTTPStatus(http.StatusCreated))
+				Expect(rr).To(HaveHTTPHeaderWithValue("Content-Type", "application/json"))
+				Expect(rr).To(HaveHTTPBody(SatisfyAll(
+					MatchJSONPath("$.type", "app"),
+				)))
 			})
 		})
 
