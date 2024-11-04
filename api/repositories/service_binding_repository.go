@@ -115,7 +115,10 @@ func (m CreateServiceBindingMessage) toCFServiceBinding() (*korifiv1alpha1.CFSer
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      guid,
 			Namespace: m.SpaceGUID,
-			Labels:    map[string]string{LabelServiceBindingProvisionedService: "true"},
+			Labels: map[string]string{
+				LabelServiceBindingProvisionedService: "true",
+				korifiv1alpha1.CFBindingTypeLabelKey:  m.Type,
+			},
 		},
 		Spec: korifiv1alpha1.CFServiceBindingSpec{
 			DisplayName: m.Name,
