@@ -16,11 +16,18 @@ type ServiceBindingCreate struct {
 }
 
 func (p ServiceBindingCreate) ToMessage(spaceGUID string) repositories.CreateServiceBindingMessage {
+	var appGUID string
+	if p.Relationships.App != nil &&
+		p.Relationships.App.Data != nil {
+		appGUID = p.Relationships.App.Data.GUID
+	}
+
 	return repositories.CreateServiceBindingMessage{
 		Name:                p.Name,
 		ServiceInstanceGUID: p.Relationships.ServiceInstance.Data.GUID,
-		AppGUID:             p.Relationships.App.Data.GUID,
+		AppGUID:             appGUID,
 		SpaceGUID:           spaceGUID,
+		Type:                p.Type,
 	}
 }
 
