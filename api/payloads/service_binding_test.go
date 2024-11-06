@@ -64,6 +64,32 @@ var _ = Describe("ServiceBindingCreate", func() {
 		apiError             errors.ApiError
 	)
 
+	When("binding is of type key", func() {
+		BeforeEach(func() {
+			serviceBindingCreate = new(payloads.ServiceBindingCreate)
+			createPayload = payloads.ServiceBindingCreate{
+				Relationships: &payloads.ServiceBindingRelationships{
+					ServiceInstance: &payloads.Relationship{
+						Data: &payloads.RelationshipData{
+							GUID: "service-instance-guid",
+						},
+					},
+				},
+				Type: "key",
+			}
+		})
+
+		JustBeforeEach(func() {
+			validatorErr = validator.DecodeAndValidateJSONPayload(createJSONRequest(createPayload), serviceBindingCreate)
+			apiError, _ = validatorErr.(errors.ApiError)
+		})
+
+		It("succeeds", func() {
+			Expect(validatorErr).NotTo(HaveOccurred())
+			Expect(serviceBindingCreate).To(gstruct.PointTo(Equal(createPayload)))
+		})
+	})
+
 	BeforeEach(func() {
 		serviceBindingCreate = new(payloads.ServiceBindingCreate)
 		createPayload = payloads.ServiceBindingCreate{
@@ -91,17 +117,6 @@ var _ = Describe("ServiceBindingCreate", func() {
 	It("succeeds", func() {
 		Expect(validatorErr).NotTo(HaveOccurred())
 		Expect(serviceBindingCreate).To(gstruct.PointTo(Equal(createPayload)))
-	})
-
-	When(`the type is "key"`, func() {
-		BeforeEach(func() {
-			createPayload.Type = "key"
-		})
-
-		It("fails", func() {
-			Expect(apiError).To(HaveOccurred())
-			Expect(apiError.Detail()).To(ContainSubstring("type value must be one of: app"))
-		})
 	})
 
 	When("all relationships are missing", func() {

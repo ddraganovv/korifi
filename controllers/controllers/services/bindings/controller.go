@@ -40,9 +40,8 @@ import (
 )
 
 const (
-	ServiceBindingGUIDLabel           = "korifi.cloudfoundry.org/service-binding-guid"
-	ServiceCredentialBindingTypeLabel = "korifi.cloudfoundry.org/service-credential-binding-type"
-	ServiceBindingSecretTypePrefix    = "servicebinding.io/"
+	ServiceBindingGUIDLabel        = "korifi.cloudfoundry.org/service-binding-guid"
+	ServiceBindingSecretTypePrefix = "servicebinding.io/"
 )
 
 type CredentialsReconciler interface {
@@ -174,11 +173,13 @@ func (r *Reconciler) ReconcileResource(ctx context.Context, cfServiceBinding *ko
 		return res, err
 	}
 
-	cfApp := new(korifiv1alpha1.CFApp)
-	err = r.k8sClient.Get(ctx, types.NamespacedName{Name: cfServiceBinding.Spec.AppRef.Name, Namespace: cfServiceBinding.Namespace}, cfApp)
-	if err != nil {
-		log.Info("error when fetching CFApp", "reason", err)
-		return ctrl.Result{}, err
+	if cfServiceBinding.Labels[korifiv1alpha1.CFBindingTypeLabelKey] == korifiv1alpha1.CFServiceBindingTypeApp {
+		cfApp := new(korifiv1alpha1.CFApp)
+		err = r.k8sClient.Get(ctx, types.NamespacedName{Name: cfServiceBinding.Spec.AppRef.Name, Namespace: cfServiceBinding.Namespace}, cfApp)
+		if err != nil {
+			log.Info("error when fetching CFApp", "reason", err)
+			return ctrl.Result{}, err
+		}
 	}
 
 	sbServiceBinding, err := r.reconcileSBServiceBinding(ctx, cfServiceBinding)
@@ -271,9 +272,9 @@ func (r *Reconciler) toSBServiceBinding(cfServiceBinding *korifiv1alpha1.CFServi
 			Name:      fmt.Sprintf("cf-binding-%s", cfServiceBinding.Name),
 			Namespace: cfServiceBinding.Namespace,
 			Labels: map[string]string{
-				ServiceBindingGUIDLabel:           cfServiceBinding.Name,
-				korifiv1alpha1.CFAppGUIDLabelKey:  cfServiceBinding.Spec.AppRef.Name,
-				ServiceCredentialBindingTypeLabel: "app",
+				ServiceBindingGUIDLabel:              cfServiceBinding.Name,
+				korifiv1alpha1.CFAppGUIDLabelKey:     cfServiceBinding.Spec.AppRef.Name,
+				korifiv1alpha1.CFBindingTypeLabelKey: cfServiceBinding.Labels[korifiv1alpha1.CFBindingTypeLabelKey],
 			},
 		},
 		Spec: servicebindingv1beta1.ServiceBindingSpec{
