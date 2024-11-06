@@ -56,7 +56,7 @@ func (h *ServiceBinding) create(r *http.Request) (*routing.Response, error) {
 	if err := h.requestValidator.DecodeAndValidateJSONPayload(r, payload); err != nil {
 		return nil, apierrors.LogAndReturn(logger, err, "failed to decode payload")
 	}
-  
+
 	serviceInstance, err := h.serviceInstanceRepo.GetServiceInstance(r.Context(), authInfo, payload.Relationships.ServiceInstance.Data.GUID)
 	if err != nil {
 		return nil, apierrors.LogAndReturn(logger, apierrors.ForbiddenAsNotFound(err), "failed to get "+repositories.ServiceInstanceResourceType)
@@ -87,7 +87,7 @@ func (h *ServiceBinding) create(r *http.Request) (*routing.Response, error) {
 
 func (h *ServiceBinding) createServiceBinding(
 	ctx context.Context,
-	authInfo authorization.Info
+	authInfo authorization.Info,
 	payload *payloads.ServiceBindingCreate,
 	serviceInstance repositories.ServiceInstanceRecord,
 	logger logr.Logger,
