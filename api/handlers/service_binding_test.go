@@ -89,6 +89,55 @@ var _ = Describe("ServiceBinding", func() {
 					Type: korifiv1alpha1.CFServiceBindingTypeKey,
 				}
 				requestValidator.DecodeAndValidateJSONPayloadStub = decodeAndValidatePayloadStub(&payload)
+		})
+
+		When("creating service binding of type key", func() {
+			BeforeEach(func() {
+				serviceBindingRepo.CreateServiceBindingReturns(repositories.ServiceBindingRecord{
+					Type: "key",
+				}, nil)
+			})
+
+			It("creates service binding of type key", func() {
+				Expect(serviceInstanceRepo.GetServiceInstanceCallCount()).To(Equal(1))
+				Expect(serviceBindingRepo.CreateServiceBindingCallCount()).To(Equal(1))
+
+				Expect(rr).To(HaveHTTPStatus(http.StatusCreated))
+				Expect(rr).To(HaveHTTPHeaderWithValue("Content-Type", "application/json"))
+				Expect(rr).To(HaveHTTPBody(SatisfyAll(
+					MatchJSONPath("$.type", "key"),
+				)))
+			})
+		})
+
+		When("creating service binding of type app", func() {
+			BeforeEach(func() {
+				serviceBindingRepo.CreateServiceBindingReturns(repositories.ServiceBindingRecord{
+					Type: "app",
+				}, nil)
+			})
+
+			It("creates service binding of type app", func() {
+				Expect(serviceInstanceRepo.GetServiceInstanceCallCount()).To(Equal(1))
+				Expect(serviceBindingRepo.CreateServiceBindingCallCount()).To(Equal(1))
+
+				Expect(rr).To(HaveHTTPStatus(http.StatusCreated))
+				Expect(rr).To(HaveHTTPHeaderWithValue("Content-Type", "application/json"))
+				Expect(rr).To(HaveHTTPBody(SatisfyAll(
+					MatchJSONPath("$.type", "app"),
+				)))
+			})
+		})
+
+		It("validates the payload", func() {
+			Expect(requestValidator.DecodeAndValidateJSONPayloadCallCount()).To(Equal(1))
+			actualReq, _ := requestValidator.DecodeAndValidateJSONPayloadArgsForCall(0)
+			Expect(bodyString(actualReq)).To(Equal("the-json-body"))
+		})
+
+		When("the request body is invalid json", func() {
+			BeforeEach(func() {
+				requestValidator.DecodeAndValidateJSONPayloadReturns(errors.New("boom"))
 			})
 
 			It("validates the payload", func() {

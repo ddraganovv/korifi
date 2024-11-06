@@ -118,20 +118,3 @@ func (c *ServiceBindingUpdate) ToMessage(serviceBindingGUID string) repositories
 		},
 	}
 }
-
-// cf curl "v3/service_credential_bindings" -X POST  -d '{
-//     "type": "app",
-//     "name": "some-binding-name",
-//     "relationships": {
-//       "service_instance": {
-//         "data": {
-//           "guid": "d8083b73-9362-40ad-b8cc-adbc8ad6f948"
-//         }
-//       },
-//       "app": {
-//         "data": {
-//           "guid": "d7d0e22d-31ed-4760-8909-64ab3c2e01f0"
-//         }
-//       }
-//     },
-//   }'
