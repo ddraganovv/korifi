@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
 	"code.cloudfoundry.org/korifi/api/authorization"
@@ -119,8 +120,14 @@ func (m *ListServiceBindingsMessage) matches(serviceBinding korifiv1alpha1.CFSer
 		tools.EmptyOrContains(m.PlanGUIDs, serviceBinding.Labels[korifiv1alpha1.PlanGUIDLabelKey])
 }
 
-func (m CreateServiceBindingMessage) toCFServiceBinding() *korifiv1alpha1.CFServiceBinding {
+func (m CreateServiceBindingMessage) toCFServiceBinding() (*korifiv1alpha1.CFServiceBinding, error) {
 	guid := uuid.NewString()
+
+	parameterBytes, err := json.Marshal(m.Parameters)
+	if err != nil {
+		return &korifiv1alpha1.CFServiceBinding{}, fmt.Errorf("failed to marshal parameters: %w", err)
+	}
+
 	return &korifiv1alpha1.CFServiceBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      guid,
@@ -135,8 +142,11 @@ func (m CreateServiceBindingMessage) toCFServiceBinding() *korifiv1alpha1.CFServ
 				Name:       m.ServiceInstanceGUID,
 			},
 			AppRef: corev1.LocalObjectReference{Name: m.AppGUID},
+			Parameters: &runtime.RawExtension{
+				Raw: parameterBytes,
+			},
 		},
-	}
+	}, nil
 }
 
 type UpdateServiceBindingMessage struct {
@@ -150,7 +160,10 @@ func (r *ServiceBindingRepo) CreateServiceBinding(ctx context.Context, authInfo 
 		return ServiceBindingRecord{}, fmt.Errorf("failed to build user client: %w", err)
 	}
 
-	cfServiceBinding := message.toCFServiceBinding()
+	cfServiceBinding, err := message.toCFServiceBinding()
+	if err != nil {
+		return ServiceBindingRecord{}, fmt.Errorf("failed to convert to CfServiceBinding: %w", err)
+	}
 
 	cfApp := new(korifiv1alpha1.CFApp)
 	err = userClient.Get(ctx, types.NamespacedName{Name: cfServiceBinding.Spec.AppRef.Name, Namespace: cfServiceBinding.Namespace}, cfApp)
