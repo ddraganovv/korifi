@@ -68,6 +68,9 @@ var _ = Describe("CFServiceBinding", func() {
 				Finalizers: []string{
 					korifiv1alpha1.CFServiceBindingFinalizerName,
 				},
+				Labels: map[string]string{
+					korifiv1alpha1.ServiceCredentialBindingTypeLabel: korifiv1alpha1.CFServiceBindingTypeApp,
+				},
 			},
 			Spec: korifiv1alpha1.CFServiceBindingSpec{
 				Service: corev1.ObjectReference{
