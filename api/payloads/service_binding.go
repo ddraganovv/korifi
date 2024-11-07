@@ -1,11 +1,13 @@
 package payloads
 
 import (
+	"fmt"
 	"net/url"
 
 	"code.cloudfoundry.org/korifi/api/payloads/parse"
 	"code.cloudfoundry.org/korifi/api/payloads/validation"
 	"code.cloudfoundry.org/korifi/api/repositories"
+	"code.cloudfoundry.org/korifi/tools"
 	jellidation "github.com/jellydator/validation"
 )
 
@@ -17,8 +19,7 @@ type ServiceBindingCreate struct {
 
 func (p ServiceBindingCreate) ToMessage(spaceGUID string) repositories.CreateServiceBindingMessage {
 	var appGUID string
-	if p.Relationships.App != nil &&
-		p.Relationships.App.Data != nil {
+	if p.Relationships.App != nil {
 		appGUID = p.Relationships.App.Data.GUID
 	}
 
@@ -34,7 +35,23 @@ func (p ServiceBindingCreate) ToMessage(spaceGUID string) repositories.CreateSer
 func (p ServiceBindingCreate) Validate() error {
 	return jellidation.ValidateStruct(&p,
 		jellidation.Field(&p.Type, validation.OneOf("app", "key")),
-		jellidation.Field(&p.Relationships, jellidation.NotNil),
+		jellidation.Field(&p.Relationships, jellidation.By(func(value any) error {
+			relationships, ok := value.(*ServiceBindingRelationships)
+			if !ok || relationships == nil {
+				return fmt.Errorf("relationships is required")
+			}
+
+			if p.Type == "app" {
+				if relationships.App == nil {
+					return jellidation.NewError("when type is app", "relationships.app is required")
+				}
+				if relationships.App.Data.GUID == "" {
+					return fmt.Errorf("relationships.app.data.guid cannot be blank")
+				}
+			}
+
+			return nil
+		})),
 	)
 }
 
@@ -50,6 +67,7 @@ func (r ServiceBindingRelationships) Validate() error {
 }
 
 type ServiceBindingList struct {
+	Type                 string
 	AppGUIDs             string
 	ServiceInstanceGUIDs string
 	Include              string
@@ -57,13 +75,26 @@ type ServiceBindingList struct {
 	PlanGUIDs            string
 }
 
+func (l ServiceBindingList) Validate() error {
+	return jellidation.ValidateStruct(&l,
+		jellidation.Field(&l.Type, validation.OneOf("app", "key")),
+		jellidation.Field(&l.Include, validation.OneOf("app", "service_instance")),
+	)
+}
+
 func (l *ServiceBindingList) ToMessage() repositories.ListServiceBindingsMessage {
-	return repositories.ListServiceBindingsMessage{
+	message := repositories.ListServiceBindingsMessage{
 		ServiceInstanceGUIDs: parse.ArrayParam(l.ServiceInstanceGUIDs),
 		AppGUIDs:             parse.ArrayParam(l.AppGUIDs),
 		LabelSelector:        l.LabelSelector,
 		PlanGUIDs:            parse.ArrayParam(l.PlanGUIDs),
 	}
+
+	if l.Type != "" {
+		message.Type = tools.PtrTo(l.Type)
+	}
+
+	return message
 }
 
 func (l *ServiceBindingList) SupportedKeys() []string {
@@ -71,6 +102,7 @@ func (l *ServiceBindingList) SupportedKeys() []string {
 }
 
 func (l *ServiceBindingList) DecodeFromURLValues(values url.Values) error {
+	l.Type = values.Get("type")
 	l.AppGUIDs = values.Get("app_guids")
 	l.ServiceInstanceGUIDs = values.Get("service_instance_guids")
 	l.Include = values.Get("include")

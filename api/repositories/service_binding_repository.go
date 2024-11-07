@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"fmt"
+	"log"
 	"slices"
 	"time"
 
@@ -101,17 +102,18 @@ type ListServiceBindingsMessage struct {
 	AppGUIDs             []string
 	ServiceInstanceGUIDs []string
 	LabelSelector        string
-	Type                 string
+	Type                 *string
 	PlanGUIDs            []string
 }
 
 func (m *ListServiceBindingsMessage) matches(serviceBinding korifiv1alpha1.CFServiceBinding) bool {
 	return tools.EmptyOrContains(m.ServiceInstanceGUIDs, serviceBinding.Spec.Service.Name) &&
 		tools.EmptyOrContains(m.AppGUIDs, serviceBinding.Spec.AppRef.Name) &&
-		tools.EmptyOrContains(m.PlanGUIDs, serviceBinding.Labels[korifiv1alpha1.PlanGUIDLabelKey])
+		tools.EmptyOrContains(m.PlanGUIDs, serviceBinding.Labels[korifiv1alpha1.PlanGUIDLabelKey]) &&
+		tools.NilOrEquals(m.Type, serviceBinding.Labels[korifiv1alpha1.ServiceCredentialBindingTypeLabel])
 }
 
-func (m CreateServiceBindingMessage) toCFServiceBinding() (*korifiv1alpha1.CFServiceBinding, error) {
+func (m CreateServiceBindingMessage) toCFServiceBinding() *korifiv1alpha1.CFServiceBinding {
 	guid := uuid.NewString()
 
 	binding := &korifiv1alpha1.CFServiceBinding{
@@ -119,8 +121,8 @@ func (m CreateServiceBindingMessage) toCFServiceBinding() (*korifiv1alpha1.CFSer
 			Name:      guid,
 			Namespace: m.SpaceGUID,
 			Labels: map[string]string{
-				LabelServiceBindingProvisionedService: "true",
-				korifiv1alpha1.CFBindingTypeLabelKey:  m.Type,
+				LabelServiceBindingProvisionedService:            "true",
+				korifiv1alpha1.ServiceCredentialBindingTypeLabel: m.Type,
 			},
 		},
 		Spec: korifiv1alpha1.CFServiceBindingSpec{
@@ -137,7 +139,7 @@ func (m CreateServiceBindingMessage) toCFServiceBinding() (*korifiv1alpha1.CFSer
 		binding.Spec.AppRef = corev1.LocalObjectReference{Name: m.AppGUID}
 	}
 
-	return binding, nil
+	return binding
 }
 
 type UpdateServiceBindingMessage struct {
@@ -151,10 +153,7 @@ func (r *ServiceBindingRepo) CreateServiceBinding(ctx context.Context, authInfo 
 		return ServiceBindingRecord{}, fmt.Errorf("failed to build user client: %w", err)
 	}
 
-	cfServiceBinding, err := message.toCFServiceBinding()
-	if err != nil {
-		return ServiceBindingRecord{}, fmt.Errorf("failed to map to CFServiceBinding: %w", err)
-	}
+	cfServiceBinding := message.toCFServiceBinding()
 
 	if message.Type == korifiv1alpha1.CFServiceBindingTypeApp {
 		cfApp := new(korifiv1alpha1.CFApp)
@@ -193,6 +192,8 @@ func (r *ServiceBindingRepo) CreateServiceBinding(ctx context.Context, authInfo 
 			return ServiceBindingRecord{}, err
 		}
 	}
+
+	log.Printf("aaa: %+v", cfServiceBinding)
 
 	return serviceBindingToRecord(*cfServiceBinding), nil
 }
@@ -245,7 +246,7 @@ func (r *ServiceBindingRepo) GetServiceBinding(ctx context.Context, authInfo aut
 func serviceBindingToRecord(binding korifiv1alpha1.CFServiceBinding) ServiceBindingRecord {
 	return ServiceBindingRecord{
 		GUID:                binding.Name,
-		Type:                binding.Labels[korifiv1alpha1.CFBindingTypeLabelKey],
+		Type:                binding.Labels[korifiv1alpha1.ServiceCredentialBindingTypeLabel],
 		Name:                binding.Spec.DisplayName,
 		AppGUID:             binding.Spec.AppRef.Name,
 		ServiceInstanceGUID: binding.Spec.Service.Name,
@@ -385,15 +386,10 @@ func (r *ServiceBindingRepo) ListServiceBindings(ctx context.Context, authInfo a
 		return []ServiceBindingRecord{}, apierrors.NewUnprocessableEntityError(err, "invalid label selector")
 	}
 
-	typeSelector, err := labels.Parse(fmt.Sprintf("%s=%s", korifiv1alpha1.CFBindingTypeLabelKey, message.Type))
-	if err != nil {
-		return []ServiceBindingRecord{}, apierrors.NewUnprocessableEntityError(err, "invalid binding type")
-	}
-
 	var serviceBindings []korifiv1alpha1.CFServiceBinding
 	for _, ns := range authorizedSpaceNamespaces.Collect() {
 		serviceBindingList := new(korifiv1alpha1.CFServiceBindingList)
-		err = userClient.List(ctx, serviceBindingList, client.InNamespace(ns), &client.ListOptions{LabelSelector: labelSelector}, &client.ListOptions{LabelSelector: typeSelector})
+		err = userClient.List(ctx, serviceBindingList, client.InNamespace(ns), &client.ListOptions{LabelSelector: labelSelector})
 		if k8serrors.IsForbidden(err) {
 			continue
 		}
