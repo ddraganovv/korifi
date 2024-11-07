@@ -83,13 +83,18 @@ func (l ServiceBindingList) Validate() error {
 }
 
 func (l *ServiceBindingList) ToMessage() repositories.ListServiceBindingsMessage {
-	return repositories.ListServiceBindingsMessage{
-		Type:                 tools.PtrTo(l.Type),
+	message := repositories.ListServiceBindingsMessage{
 		ServiceInstanceGUIDs: parse.ArrayParam(l.ServiceInstanceGUIDs),
 		AppGUIDs:             parse.ArrayParam(l.AppGUIDs),
 		LabelSelector:        l.LabelSelector,
 		PlanGUIDs:            parse.ArrayParam(l.PlanGUIDs),
 	}
+
+	if l.Type != "" {
+		message.Type = tools.PtrTo(l.Type)
+	}
+
+	return message
 }
 
 func (l *ServiceBindingList) SupportedKeys() []string {
