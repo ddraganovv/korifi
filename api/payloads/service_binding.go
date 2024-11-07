@@ -75,6 +75,13 @@ type ServiceBindingList struct {
 	PlanGUIDs            string
 }
 
+func (l ServiceBindingList) Validate() error {
+	return jellidation.ValidateStruct(&l,
+		jellidation.Field(&l.Type, validation.OneOf("app", "key")),
+		jellidation.Field(&l.Include, validation.OneOf("app", "service_instance")),
+	)
+}
+
 func (l *ServiceBindingList) ToMessage() repositories.ListServiceBindingsMessage {
 	return repositories.ListServiceBindingsMessage{
 		Type:                 tools.PtrTo(l.Type),

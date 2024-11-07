@@ -769,8 +769,8 @@ var _ = Describe("ServiceBindingRepo", func() {
 					Name:      prefixedGUID("binding-1"),
 					Namespace: space.Name,
 					Labels: map[string]string{
-						korifiv1alpha1.PlanGUIDLabelKey:      "plan-1",
-						korifiv1alpha1.CFBindingTypeLabelKey: korifiv1alpha1.CFServiceBindingTypeApp,
+						korifiv1alpha1.PlanGUIDLabelKey:                  "plan-1",
+						korifiv1alpha1.ServiceCredentialBindingTypeLabel: korifiv1alpha1.CFServiceBindingTypeApp,
 					},
 				},
 				Spec: korifiv1alpha1.CFServiceBindingSpec{
@@ -795,8 +795,8 @@ var _ = Describe("ServiceBindingRepo", func() {
 					Name:      prefixedGUID("binding-2"),
 					Namespace: space2.Name,
 					Labels: map[string]string{
-						korifiv1alpha1.PlanGUIDLabelKey:      "plan-2",
-						korifiv1alpha1.CFBindingTypeLabelKey: korifiv1alpha1.CFServiceBindingTypeApp,
+						korifiv1alpha1.PlanGUIDLabelKey:                  "plan-2",
+						korifiv1alpha1.ServiceCredentialBindingTypeLabel: korifiv1alpha1.CFServiceBindingTypeApp,
 					},
 				},
 				Spec: korifiv1alpha1.CFServiceBindingSpec{
@@ -820,8 +820,8 @@ var _ = Describe("ServiceBindingRepo", func() {
 					Name:      prefixedGUID("binding-3"),
 					Namespace: space2.Name,
 					Labels: map[string]string{
-						korifiv1alpha1.PlanGUIDLabelKey:      "plan-3",
-						korifiv1alpha1.CFBindingTypeLabelKey: korifiv1alpha1.CFServiceBindingTypeApp,
+						korifiv1alpha1.PlanGUIDLabelKey:                  "plan-3",
+						korifiv1alpha1.ServiceCredentialBindingTypeLabel: korifiv1alpha1.CFServiceBindingTypeApp,
 					},
 				},
 				Spec: korifiv1alpha1.CFServiceBindingSpec{
@@ -842,8 +842,8 @@ var _ = Describe("ServiceBindingRepo", func() {
 					Name:      prefixedGUID("binding-4"),
 					Namespace: space2.Name,
 					Labels: map[string]string{
-						korifiv1alpha1.PlanGUIDLabelKey:      "plan-4",
-						korifiv1alpha1.CFBindingTypeLabelKey: korifiv1alpha1.CFServiceBindingTypeKey,
+						korifiv1alpha1.PlanGUIDLabelKey:                  "plan-4",
+						korifiv1alpha1.ServiceCredentialBindingTypeLabel: korifiv1alpha1.CFServiceBindingTypeKey,
 					},
 				},
 				Spec: korifiv1alpha1.CFServiceBindingSpec{

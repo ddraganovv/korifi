@@ -110,7 +110,7 @@ func (m *ListServiceBindingsMessage) matches(serviceBinding korifiv1alpha1.CFSer
 	return tools.EmptyOrContains(m.ServiceInstanceGUIDs, serviceBinding.Spec.Service.Name) &&
 		tools.EmptyOrContains(m.AppGUIDs, serviceBinding.Spec.AppRef.Name) &&
 		tools.EmptyOrContains(m.PlanGUIDs, serviceBinding.Labels[korifiv1alpha1.PlanGUIDLabelKey]) &&
-		tools.NilOrEquals(m.Type, serviceBinding.Labels[korifiv1alpha1.CFBindingTypeLabelKey])
+		tools.NilOrEquals(m.Type, serviceBinding.Labels[korifiv1alpha1.ServiceCredentialBindingTypeLabel])
 }
 
 func (m CreateServiceBindingMessage) toCFServiceBinding() *korifiv1alpha1.CFServiceBinding {
@@ -121,8 +121,8 @@ func (m CreateServiceBindingMessage) toCFServiceBinding() *korifiv1alpha1.CFServ
 			Name:      guid,
 			Namespace: m.SpaceGUID,
 			Labels: map[string]string{
-				LabelServiceBindingProvisionedService: "true",
-				korifiv1alpha1.CFBindingTypeLabelKey:  m.Type,
+				LabelServiceBindingProvisionedService:            "true",
+				korifiv1alpha1.ServiceCredentialBindingTypeLabel: m.Type,
 			},
 		},
 		Spec: korifiv1alpha1.CFServiceBindingSpec{
@@ -246,7 +246,7 @@ func (r *ServiceBindingRepo) GetServiceBinding(ctx context.Context, authInfo aut
 func serviceBindingToRecord(binding korifiv1alpha1.CFServiceBinding) ServiceBindingRecord {
 	return ServiceBindingRecord{
 		GUID:                binding.Name,
-		Type:                binding.Labels[korifiv1alpha1.CFBindingTypeLabelKey],
+		Type:                binding.Labels[korifiv1alpha1.ServiceCredentialBindingTypeLabel],
 		Name:                binding.Spec.DisplayName,
 		AppGUID:             binding.Spec.AppRef.Name,
 		ServiceInstanceGUID: binding.Spec.Service.Name,
