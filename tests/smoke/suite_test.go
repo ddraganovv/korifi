@@ -11,7 +11,6 @@ import (
 
 	korifiv1alpha1 "code.cloudfoundry.org/korifi/controllers/api/v1alpha1"
 	"code.cloudfoundry.org/korifi/tests/helpers"
-	"code.cloudfoundry.org/korifi/tests/helpers/broker"
 	"code.cloudfoundry.org/korifi/tests/helpers/fail_handler"
 
 	"github.com/google/uuid"
@@ -191,13 +190,6 @@ func getAppGUID(appName string) string {
 	session := helpers.Cf("app", appName, "--guid")
 	Expect(session).To(Exit(0))
 	return string(session.Out.Contents())
-}
-
-func cleanupBroker(brokerName string) {
-	GinkgoHelper()
-
-	Expect(helpers.Cf("delete-service-broker", "-f", brokerName)).To(Exit(0))
-	broker.NewCatalogPurger(sharedData.RootNamespace).ForBrokerName(brokerName).Purge()
 }
 
 func matchSubstrings(substrings ...string) types.GomegaMatcher {

@@ -80,10 +80,6 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) *builder.Builder {
 		Watches(
 			&korifiv1alpha1.CFServiceInstance{},
 			handler.EnqueueRequestsFromMapFunc(r.serviceInstanceToServiceBindings),
-		).
-		Watches(
-			&korifiv1alpha1.CFApp{},
-			handler.EnqueueRequestsFromMapFunc(r.appToServiceBindings),
 		)
 }
 
@@ -94,31 +90,6 @@ func (r *Reconciler) serviceInstanceToServiceBindings(ctx context.Context, o cli
 	if err := r.k8sClient.List(ctx, &serviceBindings,
 		client.InNamespace(serviceInstance.Namespace),
 		client.MatchingFields{shared.IndexServiceBindingServiceInstanceGUID: serviceInstance.Name},
-	); err != nil {
-		return []reconcile.Request{}
-	}
-
-	requests := []reconcile.Request{}
-	for _, sb := range serviceBindings.Items {
-		requests = append(requests, reconcile.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      sb.Name,
-				Namespace: sb.Namespace,
-			},
-		})
-	}
-
-	return requests
-}
-
-func (r *Reconciler) appToServiceBindings(ctx context.Context, o client.Object) []reconcile.Request {
-	cfApp := o.(*korifiv1alpha1.CFApp)
-
-	serviceBindings := &korifiv1alpha1.CFServiceBindingList{}
-
-	if err := r.k8sClient.List(ctx, serviceBindings,
-		client.InNamespace(cfApp.Namespace),
-		client.MatchingFields{shared.IndexServiceBindingAppGUID: cfApp.Name},
 	); err != nil {
 		return []reconcile.Request{}
 	}

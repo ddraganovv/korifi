@@ -3,6 +3,7 @@ package e2e_test
 import (
 	"net/http"
 
+	"code.cloudfoundry.org/korifi/tests/helpers/broker"
 	"github.com/go-resty/resty/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -23,10 +24,6 @@ var _ = Describe("Service Bindings", func() {
 		spaceGUID = createSpace(generateGUID("space1"), commonTestOrgGUID)
 		appGUID = createBuildpackApp(spaceGUID, generateGUID("app"))
 		upsiGUID = createServiceInstance(spaceGUID, generateGUID("service-instance"), nil)
-	})
-
-	AfterEach(func() {
-		deleteSpace(spaceGUID)
 	})
 
 	Describe("POST /v3/service_credential_bindings/{guid}", func() {
@@ -58,13 +55,15 @@ var _ = Describe("Service Bindings", func() {
 		})
 
 		When("binding to a managed service instance", func() {
-			BeforeEach(func() {
-				brokerGUID := createBroker(serviceBrokerURL)
-				DeferCleanup(func() {
-					cleanupBroker(brokerGUID)
-				})
+			var brokerGUID string
 
+			BeforeEach(func() {
+				brokerGUID = createBroker(serviceBrokerURL)
 				instanceGUID = createManagedServiceInstance(brokerGUID, spaceGUID)
+			})
+
+			AfterEach(func() {
+				broker.NewCatalogDeleter(rootNamespace).ForBrokerGUID(brokerGUID).Delete()
 			})
 
 			It("succeeds with a job redirect", func() {
@@ -116,14 +115,17 @@ var _ = Describe("Service Bindings", func() {
 		})
 
 		When("bound to a managed service instance", func() {
+			var brokerGUID string
+
 			BeforeEach(func() {
-				brokerGUID := createBroker(serviceBrokerURL)
-				DeferCleanup(func() {
-					cleanupBroker(brokerGUID)
-				})
+				brokerGUID = createBroker(serviceBrokerURL)
 
 				instanceGUID := createManagedServiceInstance(brokerGUID, spaceGUID)
 				bindingGUID = createManagedServiceBinding(appGUID, instanceGUID, "")
+			})
+
+			AfterEach(func() {
+				broker.NewCatalogDeleter(rootNamespace).ForBrokerGUID(brokerGUID).Delete()
 			})
 
 			It("succeeds with a job redirect", func() {
