@@ -544,7 +544,7 @@ var _ = Describe("ServiceBindingRepo", func() {
 				).To(Succeed())
 
 				Expect(serviceBinding.Labels).To(HaveKeyWithValue("servicebinding.io/provisioned-service", "true"))
-				Expect(serviceBinding.Labels).To(HaveKeyWithValue("korifi.cloudfoundry.org/binding-type", korifiv1alpha1.CFServiceBindingTypeKey))
+				Expect(serviceBinding.Labels).To(HaveKeyWithValue(korifiv1alpha1.ServiceCredentialBindingTypeLabel, korifiv1alpha1.CFServiceBindingTypeKey))
 				Expect(serviceBinding.Spec).To(Equal(
 					korifiv1alpha1.CFServiceBindingSpec{
 						DisplayName: nil,
@@ -636,7 +636,7 @@ var _ = Describe("ServiceBindingRepo", func() {
 				).To(Succeed())
 
 				Expect(serviceBinding.Labels).To(HaveKeyWithValue("servicebinding.io/provisioned-service", "true"))
-				Expect(serviceBinding.Labels).To(HaveKeyWithValue("korifi.cloudfoundry.org/binding-type", korifiv1alpha1.CFServiceBindingTypeApp))
+				Expect(serviceBinding.Labels).To(HaveKeyWithValue(korifiv1alpha1.ServiceCredentialBindingTypeLabel, korifiv1alpha1.CFServiceBindingTypeApp))
 				Expect(serviceBinding.Spec).To(Equal(
 					korifiv1alpha1.CFServiceBindingSpec{
 						DisplayName: nil,
