@@ -260,8 +260,14 @@ func (r *ServiceBindingRepo) GetServiceBindingDetails(ctx context.Context, authI
 		return ServiceBindingDetailsRecord{}, fmt.Errorf("failed to retrieve namespace: %w", err)
 	}
 
-	serviceBinding := &korifiv1alpha1.CFServiceBinding{}
-	err = userClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: bindingGUID}, serviceBinding)
+	serviceBinding := &korifiv1alpha1.CFServiceBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bindingGUID,
+			Namespace: namespace,
+		},
+	}
+
+	err = userClient.Get(ctx, client.ObjectKeyFromObject(serviceBinding), serviceBinding)
 	if err != nil {
 		return ServiceBindingDetailsRecord{}, fmt.Errorf("failed to get service binding: %w", apierrors.FromK8sError(err, ServiceBindingResourceType)) //
 	}

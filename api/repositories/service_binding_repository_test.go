@@ -988,7 +988,6 @@ var _ = Describe("ServiceBindingRepo", func() {
 		var (
 			serviceBindingGUID string
 			getErr             error
-			userClient         client.WithWatch
 			cfServiceInstance  *korifiv1alpha1.CFServiceInstance
 			//serviceBindingRecord repositories.ServiceBindingDetailsRecord
 		)
@@ -1023,13 +1022,7 @@ var _ = Describe("ServiceBindingRepo", func() {
 			}
 			_ = controllerutil.SetOwnerReference(cfServiceInstance, credentialsSecret, scheme.Scheme)
 
-			userClient, err = userClientFactory.BuildClient(authInfo)
-
 			createRoleBinding(ctx, userName, spaceDeveloperRole.Name, space.Name)
-			Expect(err).To(BeNil())
-
-			err = userClient.Create(ctx, credentialsSecret)
-			Expect(err).To(BeNil())
 
 			sbDisplayName := "test-service-binding"
 			serviceBinding := &korifiv1alpha1.CFServiceBinding{
@@ -1067,12 +1060,13 @@ var _ = Describe("ServiceBindingRepo", func() {
 				},
 				Data: creds,
 			}
-			_ = controllerutil.SetOwnerReference(serviceBinding, bindingCredentialsSecret, scheme.Scheme)
 
-			err = userClient.Create(ctx, bindingCredentialsSecret)
-			Expect(err).To(BeNil())
+			Expect(k8sClient.Create(ctx, bindingCredentialsSecret)).To(Succeed())
 
-			serviceBinding.Status.Binding.Name = bindingCredentialsSecret.Name
+			Expect(k8s.Patch(ctx, k8sClient, serviceBinding, func() {
+				serviceBinding.Status.Credentials.Name = bindingCredentialsSecret.Name
+			})).To(Succeed())
+
 		})
 
 		JustBeforeEach(func() {
