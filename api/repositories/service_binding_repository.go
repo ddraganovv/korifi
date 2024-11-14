@@ -257,13 +257,13 @@ func (r *ServiceBindingRepo) GetServiceBindingDetails(ctx context.Context, authI
 
 	namespace, err := r.namespaceRetriever.NamespaceFor(ctx, bindingGUID, ServiceBindingResourceType)
 	if err != nil {
-		return ServiceBindingDetailsRecord{}, err
+		return ServiceBindingDetailsRecord{}, fmt.Errorf("failed to retrieve namespace: %w", err)
 	}
 
 	serviceBinding := &korifiv1alpha1.CFServiceBinding{}
 	err = userClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: bindingGUID}, serviceBinding)
 	if err != nil {
-		return ServiceBindingDetailsRecord{}, apierrors.FromK8sError(err, ServiceBindingResourceType)
+		return ServiceBindingDetailsRecord{}, fmt.Errorf("failed to get service binding: %w", apierrors.FromK8sError(err, ServiceBindingResourceType)) //
 	}
 
 	credentialsSecret := &corev1.Secret{
@@ -275,7 +275,7 @@ func (r *ServiceBindingRepo) GetServiceBindingDetails(ctx context.Context, authI
 
 	err = userClient.Get(ctx, client.ObjectKeyFromObject(credentialsSecret), credentialsSecret)
 	if err != nil {
-		return ServiceBindingDetailsRecord{}, apierrors.ForbiddenAsNotFound(apierrors.FromK8sError(err, ServiceBindingResourceType))
+		return ServiceBindingDetailsRecord{}, fmt.Errorf("failed to get credentials: %w", apierrors.ForbiddenAsNotFound(apierrors.FromK8sError(err, ServiceBindingResourceType))) //
 	}
 
 	credentials := map[string]any{}

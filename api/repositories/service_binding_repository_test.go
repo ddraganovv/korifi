@@ -2,6 +2,7 @@ package repositories_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -22,7 +23,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 var _ = Describe("ServiceBindingRepo", func() {
@@ -979,6 +982,120 @@ var _ = Describe("ServiceBindingRepo", func() {
 				})
 			})
 		})
+	})
+
+	Describe("GetServiceBindingDetails", func() {
+		var (
+			serviceBindingGUID string
+			getErr             error
+			userClient         client.WithWatch
+			cfServiceInstance  *korifiv1alpha1.CFServiceInstance
+			//serviceBindingRecord repositories.ServiceBindingDetailsRecord
+		)
+
+		BeforeEach(func() {
+			cfApp := createAppCR(ctx, k8sClient, "app-name", prefixedGUID("app"), space.Name, "STOPPED")
+			serviceInstanceGUID := prefixedGUID("instance")
+			cfServiceInstance = createServiceInstanceCR(ctx, k8sClient, serviceInstanceGUID, space.Name, "service-instance-name", serviceInstanceGUID)
+
+			serviceBindingGUID = prefixedGUID("binding")
+
+			credentials := map[string]any{
+				"foo": "val1",
+				"bar": "val2",
+			}
+			credentialBytes, err := json.Marshal(credentials)
+			creds := map[string][]byte{
+				"credentials": credentialBytes,
+			}
+			Expect(err).To(BeNil())
+
+			//serviceBinding.Status.Credentials.Name
+			credentialsSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      cfServiceInstance.Spec.SecretName,
+					Namespace: cfServiceInstance.Namespace,
+					Labels: map[string]string{
+						"korifi.cloudfoundry.org/service-instance-guid": cfServiceInstance.Name,
+					},
+				},
+				Data: creds,
+			}
+			_ = controllerutil.SetOwnerReference(cfServiceInstance, credentialsSecret, scheme.Scheme)
+
+			userClient, err = userClientFactory.BuildClient(authInfo)
+
+			createRoleBinding(ctx, userName, spaceDeveloperRole.Name, space.Name)
+			Expect(err).To(BeNil())
+
+			err = userClient.Create(ctx, credentialsSecret)
+			Expect(err).To(BeNil())
+
+			sbDisplayName := "test-service-binding"
+			serviceBinding := &korifiv1alpha1.CFServiceBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      serviceBindingGUID,
+					Namespace: space.Name,
+					Labels:    map[string]string{"servicebinding.io/provisioned-service": "true"},
+				},
+				Spec: korifiv1alpha1.CFServiceBindingSpec{
+					DisplayName: &sbDisplayName,
+					Service: corev1.ObjectReference{
+						Kind:       "CFServiceInstance",
+						Name:       cfServiceInstance.Name,
+						APIVersion: "korifi.cloudfoundry.org/v1alpha1",
+					},
+					AppRef: corev1.LocalObjectReference{
+						Name: cfApp.Name,
+					},
+				},
+			}
+
+			Expect(
+				k8sClient.Create(ctx, serviceBinding),
+			).To(Succeed())
+
+			serviceBinding.Status.Credentials.Name = serviceInstanceGUID
+
+			bindingCredentialsSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      serviceBinding.Name,
+					Namespace: serviceBinding.Namespace,
+					Labels: map[string]string{
+						"korifi.cloudfoundry.org/service-instance-guid": serviceBinding.Name,
+					},
+				},
+				Data: creds,
+			}
+			_ = controllerutil.SetOwnerReference(serviceBinding, bindingCredentialsSecret, scheme.Scheme)
+
+			err = userClient.Create(ctx, bindingCredentialsSecret)
+			Expect(err).To(BeNil())
+
+			serviceBinding.Status.Binding.Name = bindingCredentialsSecret.Name
+		})
+
+		JustBeforeEach(func() {
+			_, getErr = repo.GetServiceBindingDetails(ctx, authInfo, serviceBindingGUID)
+
+		})
+
+		It("returns a forbidden error as no user bindings are in place", func() {
+			//Expect(getErr).To(matchers.WrapErrorAssignableToTypeOf(apierrors.ForbiddenError{}))
+
+			Expect(getErr).To(BeNil())
+		})
+
+		When("the user is a space developer", func() {
+			BeforeEach(func() {
+				createRoleBinding(ctx, userName, spaceDeveloperRole.Name, space.Name)
+			})
+
+			It("returns details", func() {
+
+			})
+		})
+
 	})
 
 	Describe("UpdateServiceBinding", func() {
