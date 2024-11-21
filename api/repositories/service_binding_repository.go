@@ -2,11 +2,12 @@ package repositories
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"slices"
 	"time"
 
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
 	"code.cloudfoundry.org/korifi/api/authorization"
@@ -18,7 +19,6 @@ import (
 	"code.cloudfoundry.org/korifi/tools"
 	"code.cloudfoundry.org/korifi/tools/k8s"
 
-	"github.com/BooleanCat/go-functional/v2/it"
 	"github.com/BooleanCat/go-functional/v2/it/itx"
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
@@ -68,6 +68,7 @@ type ServiceBindingRecord struct {
 	UpdatedAt           *time.Time
 	DeletedAt           *time.Time
 	LastOperation       ServiceBindingLastOperation
+	Parameters          map[string]any
 	Ready               bool
 }
 
@@ -86,11 +87,20 @@ type ServiceBindingLastOperation struct {
 	UpdatedAt   *time.Time
 }
 
+type Credentials map[string]any
+
+type ServiceBindingDetailsRecord struct {
+	Credentials    Credentials
+	SyslogDrainURL *string
+	VolumeMounts   []string
+}
+
 type CreateServiceBindingMessage struct {
 	Name                *string
 	ServiceInstanceGUID string
 	AppGUID             string
 	SpaceGUID           string
+	Parameters          map[string]any
 }
 
 type DeleteServiceBindingMessage struct {
@@ -110,8 +120,14 @@ func (m *ListServiceBindingsMessage) matches(serviceBinding korifiv1alpha1.CFSer
 		tools.EmptyOrContains(m.PlanGUIDs, serviceBinding.Labels[korifiv1alpha1.PlanGUIDLabelKey])
 }
 
-func (m CreateServiceBindingMessage) toCFServiceBinding() *korifiv1alpha1.CFServiceBinding {
+func (m CreateServiceBindingMessage) toCFServiceBinding() (*korifiv1alpha1.CFServiceBinding, error) {
 	guid := uuid.NewString()
+
+	parameterBytes, err := json.Marshal(m.Parameters)
+	if err != nil {
+		return &korifiv1alpha1.CFServiceBinding{}, fmt.Errorf("failed to marshal parameters: %w", err)
+	}
+
 	return &korifiv1alpha1.CFServiceBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      guid,
@@ -126,8 +142,11 @@ func (m CreateServiceBindingMessage) toCFServiceBinding() *korifiv1alpha1.CFServ
 				Name:       m.ServiceInstanceGUID,
 			},
 			AppRef: corev1.LocalObjectReference{Name: m.AppGUID},
+			Parameters: &runtime.RawExtension{
+				Raw: parameterBytes,
+			},
 		},
-	}
+	}, nil
 }
 
 type UpdateServiceBindingMessage struct {
@@ -141,7 +160,10 @@ func (r *ServiceBindingRepo) CreateServiceBinding(ctx context.Context, authInfo 
 		return ServiceBindingRecord{}, fmt.Errorf("failed to build user client: %w", err)
 	}
 
-	cfServiceBinding := message.toCFServiceBinding()
+	cfServiceBinding, err := message.toCFServiceBinding()
+	if err != nil {
+		return ServiceBindingRecord{}, fmt.Errorf("failed to convert to CfServiceBinding: %w", err)
+	}
 
 	cfApp := new(korifiv1alpha1.CFApp)
 	err = userClient.Get(ctx, types.NamespacedName{Name: cfServiceBinding.Spec.AppRef.Name, Namespace: cfServiceBinding.Namespace}, cfApp)
@@ -179,7 +201,7 @@ func (r *ServiceBindingRepo) CreateServiceBinding(ctx context.Context, authInfo 
 		}
 	}
 
-	return serviceBindingToRecord(*cfServiceBinding), nil
+	return serviceBindingToRecord(cfServiceBinding)
 }
 
 func (r *ServiceBindingRepo) DeleteServiceBinding(ctx context.Context, authInfo authorization.Info, guid string) error {
@@ -224,10 +246,145 @@ func (r *ServiceBindingRepo) GetServiceBinding(ctx context.Context, authInfo aut
 		return ServiceBindingRecord{}, apierrors.FromK8sError(err, ServiceBindingResourceType)
 	}
 
-	return serviceBindingToRecord(*serviceBinding), nil
+	return serviceBindingToRecord(serviceBinding)
 }
 
-func serviceBindingToRecord(binding korifiv1alpha1.CFServiceBinding) ServiceBindingRecord {
+func (r *ServiceBindingRepo) GetServiceBindingDetails(ctx context.Context, authInfo authorization.Info, bindingGUID string) (ServiceBindingDetailsRecord, error) {
+	userClient, err := r.userClientFactory.BuildClient(authInfo)
+	if err != nil {
+		return ServiceBindingDetailsRecord{}, fmt.Errorf("failed to build user client: %w", err)
+	}
+
+	namespace, err := r.namespaceRetriever.NamespaceFor(ctx, bindingGUID, ServiceBindingResourceType)
+	if err != nil {
+		return ServiceBindingDetailsRecord{}, fmt.Errorf("failed to retrieve namespace: %w", err)
+	}
+
+	serviceBinding := &korifiv1alpha1.CFServiceBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      bindingGUID,
+			Namespace: namespace,
+		},
+	}
+
+	err = userClient.Get(ctx, client.ObjectKeyFromObject(serviceBinding), serviceBinding)
+	if err != nil {
+		return ServiceBindingDetailsRecord{}, fmt.Errorf("failed to get service binding: %w", apierrors.FromK8sError(err, ServiceBindingResourceType)) //
+	}
+
+	credentialsSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      serviceBinding.Status.Credentials.Name,
+		},
+	}
+
+	err = userClient.Get(ctx, client.ObjectKeyFromObject(credentialsSecret), credentialsSecret)
+	if err != nil {
+		return ServiceBindingDetailsRecord{}, fmt.Errorf("failed to get credentials: %w", apierrors.ForbiddenAsNotFound(apierrors.FromK8sError(err, ServiceBindingResourceType))) //
+	}
+
+	credentials := map[string]any{}
+	err = json.Unmarshal(credentialsSecret.Data[korifiv1alpha1.CredentialsSecretKey], &credentials)
+	if err != nil {
+		return ServiceBindingDetailsRecord{}, fmt.Errorf("failed to unmarshal service binding credentials: %w", err)
+	}
+
+	return ServiceBindingDetailsRecord{Credentials: credentials}, nil
+}
+
+func (r *ServiceBindingRepo) UpdateServiceBinding(ctx context.Context, authInfo authorization.Info, updateMsg UpdateServiceBindingMessage) (ServiceBindingRecord, error) {
+	userClient, err := r.userClientFactory.BuildClient(authInfo)
+	if err != nil {
+		return ServiceBindingRecord{}, fmt.Errorf("failed to create user client: %w", err)
+	}
+
+	ns, err := r.namespaceRetriever.NamespaceFor(ctx, updateMsg.GUID, ServiceBindingResourceType)
+	if err != nil {
+		return ServiceBindingRecord{}, err
+	}
+
+	serviceBinding := &korifiv1alpha1.CFServiceBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      updateMsg.GUID,
+			Namespace: ns,
+		},
+	}
+
+	err = userClient.Get(ctx, client.ObjectKeyFromObject(serviceBinding), serviceBinding)
+	if err != nil {
+		return ServiceBindingRecord{}, fmt.Errorf("failed to get service binding: %w", apierrors.FromK8sError(err, ServiceBindingResourceType))
+	}
+
+	err = k8s.PatchResource(ctx, userClient, serviceBinding, func() {
+		updateMsg.MetadataPatch.Apply(serviceBinding)
+	})
+	if err != nil {
+		return ServiceBindingRecord{}, fmt.Errorf("failed to patch service binding metadata: %w", apierrors.FromK8sError(err, ServiceBindingResourceType))
+	}
+
+	return serviceBindingToRecord(serviceBinding)
+}
+
+func (r *ServiceBindingRepo) GetState(ctx context.Context, authInfo authorization.Info, guid string) (model.CFResourceState, error) {
+	bindingRecord, err := r.GetServiceBinding(ctx, authInfo, guid)
+	if err != nil {
+		return model.CFResourceStateUnknown, err
+	}
+
+	if bindingRecord.Ready {
+		return model.CFResourceStateReady, nil
+	}
+
+	return model.CFResourceStateUnknown, nil
+}
+
+// nolint:dupl
+func (r *ServiceBindingRepo) ListServiceBindings(ctx context.Context, authInfo authorization.Info, message ListServiceBindingsMessage) ([]ServiceBindingRecord, error) {
+	userClient, err := r.userClientFactory.BuildClient(authInfo)
+	if err != nil {
+		return []ServiceBindingRecord{}, fmt.Errorf("failed to build user client: %w", err)
+	}
+
+	authorizedSpaceNamespaces, err := authorizedSpaceNamespaces(ctx, authInfo, r.namespacePermissions)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list namespaces for spaces with user role bindings: %w", err)
+	}
+
+	labelSelector, err := labels.Parse(message.LabelSelector)
+	if err != nil {
+		return []ServiceBindingRecord{}, apierrors.NewUnprocessableEntityError(err, "invalid label selector")
+	}
+
+	var serviceBindings []korifiv1alpha1.CFServiceBinding
+	for _, ns := range authorizedSpaceNamespaces.Collect() {
+		serviceBindingList := new(korifiv1alpha1.CFServiceBindingList)
+		err = userClient.List(ctx, serviceBindingList, client.InNamespace(ns), &client.ListOptions{LabelSelector: labelSelector})
+		if k8serrors.IsForbidden(err) {
+			continue
+		}
+		if err != nil {
+			return []ServiceBindingRecord{}, fmt.Errorf("failed to list service instances in namespace %s: %w",
+				ns,
+				apierrors.FromK8sError(err, ServiceBindingResourceType),
+			)
+		}
+		serviceBindings = append(serviceBindings, serviceBindingList.Items...)
+	}
+
+	filteredServiceBindings := itx.FromSlice(serviceBindings).Filter(message.matches)
+	return serviceBindingsToRecords(filteredServiceBindings)
+}
+
+func serviceBindingToRecord(binding *korifiv1alpha1.CFServiceBinding) (ServiceBindingRecord, error) {
+	parameters := map[string]any{}
+	if binding.Spec.Parameters != nil {
+		err := json.Unmarshal(binding.Spec.Parameters.Raw, &parameters)
+		if err != nil {
+			return ServiceBindingRecord{}, fmt.Errorf("failed to unmarshal binding parameters: %w", err)
+		}
+	}
+
 	return ServiceBindingRecord{
 		GUID:                binding.Name,
 		Type:                ServiceBindingTypeApp,
@@ -238,11 +395,12 @@ func serviceBindingToRecord(binding korifiv1alpha1.CFServiceBinding) ServiceBind
 		Labels:              binding.Labels,
 		Annotations:         binding.Annotations,
 		CreatedAt:           binding.CreationTimestamp.Time,
-		UpdatedAt:           getLastUpdatedTime(&binding),
+		UpdatedAt:           getLastUpdatedTime(binding),
 		DeletedAt:           golangTime(binding.DeletionTimestamp),
-		LastOperation:       serviceBindingRecordLastOperation(binding),
-		Ready:               isBindingReady(binding),
-	}
+		LastOperation:       serviceBindingRecordLastOperation(*binding),
+		Ready:               isBindingReady(*binding),
+		Parameters:          parameters,
+	}, nil
 }
 
 func isBindingReady(binding korifiv1alpha1.CFServiceBinding) bool {
@@ -299,50 +457,17 @@ func serviceBindingRecordLastOperation(binding korifiv1alpha1.CFServiceBinding) 
 	}
 }
 
-func (r *ServiceBindingRepo) UpdateServiceBinding(ctx context.Context, authInfo authorization.Info, updateMsg UpdateServiceBindingMessage) (ServiceBindingRecord, error) {
-	userClient, err := r.userClientFactory.BuildClient(authInfo)
-	if err != nil {
-		return ServiceBindingRecord{}, fmt.Errorf("failed to create user client: %w", err)
+func serviceBindingsToRecords(serviceBindings itx.Iterator[korifiv1alpha1.CFServiceBinding]) ([]ServiceBindingRecord, error) {
+	serviceInstanceRecords := []ServiceBindingRecord{}
+
+	for sb := range serviceBindings {
+		record, err := serviceBindingToRecord(&sb)
+		if err != nil {
+			return []ServiceBindingRecord{}, err
+		}
+		serviceInstanceRecords = append(serviceInstanceRecords, record)
 	}
-
-	ns, err := r.namespaceRetriever.NamespaceFor(ctx, updateMsg.GUID, ServiceBindingResourceType)
-	if err != nil {
-		return ServiceBindingRecord{}, err
-	}
-
-	serviceBinding := &korifiv1alpha1.CFServiceBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      updateMsg.GUID,
-			Namespace: ns,
-		},
-	}
-
-	err = userClient.Get(ctx, client.ObjectKeyFromObject(serviceBinding), serviceBinding)
-	if err != nil {
-		return ServiceBindingRecord{}, fmt.Errorf("failed to get service binding: %w", apierrors.FromK8sError(err, ServiceBindingResourceType))
-	}
-
-	err = k8s.PatchResource(ctx, userClient, serviceBinding, func() {
-		updateMsg.MetadataPatch.Apply(serviceBinding)
-	})
-	if err != nil {
-		return ServiceBindingRecord{}, fmt.Errorf("failed to patch service binding metadata: %w", apierrors.FromK8sError(err, ServiceBindingResourceType))
-	}
-
-	return serviceBindingToRecord(*serviceBinding), nil
-}
-
-func (r *ServiceBindingRepo) GetState(ctx context.Context, authInfo authorization.Info, guid string) (model.CFResourceState, error) {
-	bindingRecord, err := r.GetServiceBinding(ctx, authInfo, guid)
-	if err != nil {
-		return model.CFResourceStateUnknown, err
-	}
-
-	if bindingRecord.Ready {
-		return model.CFResourceStateReady, nil
-	}
-
-	return model.CFResourceStateUnknown, nil
+	return serviceInstanceRecords, nil
 }
 
 func (r *ServiceBindingRepo) GetDeletedAt(ctx context.Context, authInfo authorization.Info, bindingGUID string) (*time.Time, error) {
@@ -351,41 +476,4 @@ func (r *ServiceBindingRepo) GetDeletedAt(ctx context.Context, authInfo authoriz
 		return nil, err
 	}
 	return serviceBinding.DeletedAt, nil
-}
-
-// nolint:dupl
-func (r *ServiceBindingRepo) ListServiceBindings(ctx context.Context, authInfo authorization.Info, message ListServiceBindingsMessage) ([]ServiceBindingRecord, error) {
-	userClient, err := r.userClientFactory.BuildClient(authInfo)
-	if err != nil {
-		return []ServiceBindingRecord{}, fmt.Errorf("failed to build user client: %w", err)
-	}
-
-	authorizedSpaceNamespaces, err := authorizedSpaceNamespaces(ctx, authInfo, r.namespacePermissions)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list namespaces for spaces with user role bindings: %w", err)
-	}
-
-	labelSelector, err := labels.Parse(message.LabelSelector)
-	if err != nil {
-		return []ServiceBindingRecord{}, apierrors.NewUnprocessableEntityError(err, "invalid label selector")
-	}
-
-	var serviceBindings []korifiv1alpha1.CFServiceBinding
-	for _, ns := range authorizedSpaceNamespaces.Collect() {
-		serviceBindingList := new(korifiv1alpha1.CFServiceBindingList)
-		err = userClient.List(ctx, serviceBindingList, client.InNamespace(ns), &client.ListOptions{LabelSelector: labelSelector})
-		if k8serrors.IsForbidden(err) {
-			continue
-		}
-		if err != nil {
-			return []ServiceBindingRecord{}, fmt.Errorf("failed to list service instances in namespace %s: %w",
-				ns,
-				apierrors.FromK8sError(err, ServiceBindingResourceType),
-			)
-		}
-		serviceBindings = append(serviceBindings, serviceBindingList.Items...)
-	}
-
-	filteredServiceBindings := itx.FromSlice(serviceBindings).Filter(message.matches)
-	return slices.Collect(it.Map(filteredServiceBindings, serviceBindingToRecord)), nil
 }
