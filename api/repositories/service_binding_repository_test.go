@@ -579,7 +579,7 @@ var _ = Describe("ServiceBindingRepo", func() {
 					Expect(
 						k8sClient.Get(ctx, types.NamespacedName{Name: serviceBindingRecord.GUID, Namespace: space.Name}, serviceBinding),
 					).To(Succeed())
-
+					korifiv1alpha1.SchemeGroupVersion.Identifier()
 					Expect(serviceBinding.Labels).To(HaveKeyWithValue("servicebinding.io/provisioned-service", "true"))
 					Expect(serviceBinding.Spec.Type).To(Equal(korifiv1alpha1.CFServiceBindingTypeKey))
 					Expect(serviceBinding.Spec).To(Equal(
