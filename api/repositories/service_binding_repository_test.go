@@ -98,7 +98,7 @@ var _ = Describe("ServiceBindingRepo", func() {
 					AppRef: corev1.LocalObjectReference{
 						Name: appGUID,
 					},
-					Type: "app",
+					Type: korifiv1alpha1.CFServiceBindingTypeApp,
 				},
 			}
 			Expect(
@@ -170,6 +170,9 @@ var _ = Describe("ServiceBindingRepo", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      uuid.NewString(),
 					Namespace: space.Name,
+				},
+				Spec: korifiv1alpha1.CFServiceBindingSpec{
+					Type: korifiv1alpha1.CFServiceBindingTypeApp,
 				},
 			}
 
@@ -274,7 +277,6 @@ var _ = Describe("ServiceBindingRepo", func() {
 
 			It("creates a new CFServiceBinding resource and returns a record", func() {
 				Expect(createErr).NotTo(HaveOccurred())
-
 				Expect(serviceBindingRecord.GUID).NotTo(BeEmpty())
 				Expect(serviceBindingRecord.Type).To(Equal(korifiv1alpha1.CFServiceBindingTypeApp))
 				Expect(serviceBindingRecord.GUID).To(matchers.BeValidUUID())
@@ -307,6 +309,7 @@ var _ = Describe("ServiceBindingRepo", func() {
 						AppRef: corev1.LocalObjectReference{
 							Name: appGUID,
 						},
+						Type: korifiv1alpha1.CFServiceBindingTypeApp,
 					},
 				))
 			})
@@ -379,6 +382,7 @@ var _ = Describe("ServiceBindingRepo", func() {
 					AppRef: corev1.LocalObjectReference{
 						Name: appGUID,
 					},
+					Type: korifiv1alpha1.CFServiceBindingTypeApp,
 				},
 			}
 			Expect(
@@ -520,6 +524,7 @@ var _ = Describe("ServiceBindingRepo", func() {
 		Describe("type key", func() {
 			BeforeEach(func() {
 				createMsg.Type = korifiv1alpha1.CFServiceBindingTypeKey
+				createMsg.AppGUID = ""
 			})
 
 			When("the user is not allowed to create CFServiceBindings", func() {
@@ -583,7 +588,7 @@ var _ = Describe("ServiceBindingRepo", func() {
 
 					Expect(serviceBindingRecord.GUID).NotTo(BeEmpty())
 					Expect(serviceBindingRecord.Type).To(Equal(korifiv1alpha1.CFServiceBindingTypeApp))
-					Expect(serviceBindingRecord.Name).To(BeNil())
+					Expect(*(serviceBindingRecord.Name)).To(Equal(serviceBindingName))
 					Expect(serviceBindingRecord.AppGUID).To(Equal(appGUID))
 					Expect(serviceBindingRecord.ServiceInstanceGUID).To(Equal(cfServiceInstance.Name))
 					Expect(serviceBindingRecord.SpaceGUID).To(Equal(space.Name))
@@ -601,20 +606,15 @@ var _ = Describe("ServiceBindingRepo", func() {
 
 					Expect(serviceBinding.Labels).To(HaveKeyWithValue("servicebinding.io/provisioned-service", "true"))
 					Expect(serviceBinding.Spec.Type).To(Equal(korifiv1alpha1.CFServiceBindingTypeApp))
-					Expect(serviceBinding.Spec).To(Equal(
-						korifiv1alpha1.CFServiceBindingSpec{
-							DisplayName: nil,
-							Service: corev1.ObjectReference{
-								Kind:       "CFServiceInstance",
-								APIVersion: korifiv1alpha1.SchemeGroupVersion.Identifier(),
-								Name:       cfServiceInstance.Name,
-							},
-							AppRef: corev1.LocalObjectReference{
-								Name: appGUID,
-							},
-							Type: korifiv1alpha1.CFServiceBindingTypeApp,
-						},
-					))
+					Expect(*(serviceBinding.Spec.DisplayName)).To(Equal(serviceBindingName))
+					Expect(serviceBinding.Spec.Service).To(Equal(corev1.ObjectReference{
+						Kind:       "CFServiceInstance",
+						APIVersion: korifiv1alpha1.SchemeGroupVersion.Identifier(),
+						Name:       cfServiceInstance.Name,
+					}))
+					Expect(serviceBinding.Spec.AppRef).To(Equal(corev1.LocalObjectReference{
+						Name: appGUID,
+					}))
 				})
 			})
 
@@ -668,6 +668,7 @@ var _ = Describe("ServiceBindingRepo", func() {
 					AppRef: corev1.LocalObjectReference{
 						Name: appGUID,
 					},
+					Type: korifiv1alpha1.CFServiceBindingTypeApp,
 				},
 			}
 			Expect(
@@ -1032,7 +1033,7 @@ var _ = Describe("ServiceBindingRepo", func() {
 						APIVersion: korifiv1alpha1.SchemeGroupVersion.Identifier(),
 						Name:       uuid.NewString(),
 					},
-					Type: "app",
+					Type: korifiv1alpha1.CFServiceBindingTypeApp,
 					AppRef: corev1.LocalObjectReference{
 						Name: appGUID,
 					},
@@ -1095,6 +1096,7 @@ var _ = Describe("ServiceBindingRepo", func() {
 					},
 				},
 				Spec: korifiv1alpha1.CFServiceBindingSpec{
+					Type: korifiv1alpha1.CFServiceBindingTypeApp,
 					Service: corev1.ObjectReference{
 						Kind:       "CFServiceInstance",
 						APIVersion: korifiv1alpha1.SchemeGroupVersion.Identifier(),
