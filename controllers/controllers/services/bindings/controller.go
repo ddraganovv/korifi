@@ -238,9 +238,9 @@ func (r *Reconciler) toSBServiceBinding(cfServiceBinding *korifiv1alpha1.CFServi
 			Name:      fmt.Sprintf("cf-binding-%s", cfServiceBinding.Name),
 			Namespace: cfServiceBinding.Namespace,
 			Labels: map[string]string{
-				ServiceBindingGUIDLabel:                          cfServiceBinding.Name,
-				korifiv1alpha1.CFAppGUIDLabelKey:                 cfServiceBinding.Spec.AppRef.Name,
-				korifiv1alpha1.ServiceCredentialBindingTypeLabel: cfServiceBinding.Spec.Type,
+				ServiceBindingGUIDLabel:                cfServiceBinding.Name,
+				korifiv1alpha1.CFAppGUIDLabelKey:       cfServiceBinding.Spec.AppRef.Name,
+				korifiv1alpha1.ServiceBindingTypeLabel: cfServiceBinding.Spec.Type,
 			},
 		},
 		Spec: servicebindingv1beta1.ServiceBindingSpec{

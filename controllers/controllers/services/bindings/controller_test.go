@@ -201,7 +201,7 @@ var _ = Describe("CFServiceBinding", func() {
 				g.Expect(sbServiceBinding.Labels).To(SatisfyAll(
 					HaveKeyWithValue(bindings.ServiceBindingGUIDLabel, binding.Name),
 					HaveKeyWithValue(korifiv1alpha1.CFAppGUIDLabelKey, cfAppGUID),
-					HaveKeyWithValue(korifiv1alpha1.ServiceCredentialBindingTypeLabel, "app"),
+					HaveKeyWithValue(korifiv1alpha1.ServiceBindingTypeLabel, "app"),
 				))
 
 				g.Expect(sbServiceBinding.OwnerReferences).To(ConsistOf(MatchFields(IgnoreExtras, Fields{
