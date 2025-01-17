@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 
 	korifiv1alpha1 "code.cloudfoundry.org/korifi/controllers/api/v1alpha1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -219,28 +220,6 @@ func (r *ManagedBindingsReconciler) reconcileCredentials(ctx context.Context, cf
 	}
 	cfServiceBinding.Status.Credentials.Name = credentialsSecret.Name
 
-	bindingSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      cfServiceBinding.Name + "-sbio",
-			Namespace: cfServiceBinding.Namespace,
-		},
-	}
-	_, err = controllerutil.CreateOrPatch(ctx, r.k8sClient, bindingSecret, func() error {
-		bindingSecret.Type = corev1.SecretType(credentials.ServiceBindingSecretTypePrefix + korifiv1alpha1.ManagedType)
-		bindingSecret.Data, err = credentials.GetServiceBindingIOSecretData(credentialsSecret)
-		if err != nil {
-			return err
-		}
-
-		return controllerutil.SetControllerReference(cfServiceBinding, bindingSecret, r.scheme)
-	})
-	if err != nil {
-		log.Error(err, "failed to create binding secret")
-		return err
-	}
-
-	cfServiceBinding.Status.Binding.Name = bindingSecret.Name
-
 	return nil
 }
 
@@ -273,9 +252,41 @@ func (r *ManagedBindingsReconciler) finalizeCFServiceBinding(
 }
 
 func (r *ManagedBindingsReconciler) reconcileSBServiceBinding(ctx context.Context, cfServiceBinding *korifiv1alpha1.CFServiceBinding) (*servicebindingv1beta1.ServiceBinding, error) {
+	log := logr.FromContextOrDiscard(ctx)
+
+	secretLookupKey := types.NamespacedName{Name: cfServiceBinding.Name, Namespace: cfServiceBinding.Namespace}
+	createdSecret := new(corev1.Secret)
+	if err := r.k8sClient.Get(ctx, secretLookupKey, createdSecret); err != nil {
+		return nil, err
+	}
+
+	bindingSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cfServiceBinding.Name + "-sbio",
+			Namespace: cfServiceBinding.Namespace,
+		},
+	}
+
+	_, err := controllerutil.CreateOrPatch(ctx, r.k8sClient, bindingSecret, func() error {
+		bindingSecret.Type = corev1.SecretType(credentials.ServiceBindingSecretTypePrefix + korifiv1alpha1.ManagedType)
+		var err error
+		bindingSecret.Data, err = credentials.GetServiceBindingIOSecretData(createdSecret)
+		if err != nil {
+			return err
+		}
+
+		return controllerutil.SetControllerReference(cfServiceBinding, bindingSecret, r.scheme)
+	})
+	if err != nil {
+		log.Error(err, "failed to create binding secret")
+		return nil, err
+	}
+
+	cfServiceBinding.Status.Binding.Name = bindingSecret.Name
+
 	sbServiceBinding := sbio.ToSBServiceBinding(cfServiceBinding, korifiv1alpha1.ManagedType)
 
-	_, err := controllerutil.CreateOrPatch(ctx, r.k8sClient, sbServiceBinding, func() error {
+	_, err = controllerutil.CreateOrPatch(ctx, r.k8sClient, sbServiceBinding, func() error {
 		return controllerutil.SetControllerReference(cfServiceBinding, sbServiceBinding, r.scheme)
 	})
 	if err != nil {
