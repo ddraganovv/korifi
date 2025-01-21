@@ -169,6 +169,31 @@ var _ = Describe("Service Bindings", func() {
 		})
 	})
 
+	Describe("GET /v3/service_credential_bindings/{guid}/details", func() {
+		var result credentialsResponse
+
+		BeforeEach(func() {
+			brokerGUID := createBroker(serviceBrokerURL)
+			instanceGUID := createManagedServiceInstance(brokerGUID, spaceGUID)
+			bindingGUID = createManagedServiceBinding(appGUID, instanceGUID, "")
+
+			result = credentialsResponse{}
+		})
+
+		JustBeforeEach(func() {
+			httpResp, httpError = adminClient.R().SetResult(&result).Get("/v3/service_credential_bindings/" + bindingGUID + "/details")
+		})
+
+		It("succeeds", func() {
+			Expect(httpError).NotTo(HaveOccurred())
+			Expect(httpResp).To(HaveRestyStatusCode(http.StatusOK))
+			Expect(result.Credentials).To(SatisfyAll(
+				HaveKeyWithValue("username", "binding-user"),
+				HaveKeyWithValue("password", "binding-password"),
+			))
+		})
+	})
+
 	Describe("PATCH /v3/service_credential_bindings/{guid}", func() {
 		var respResource responseResource
 
