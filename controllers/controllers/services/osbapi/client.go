@@ -304,6 +304,39 @@ func (c *Client) GetParameters(ctx context.Context) error {
 
 	// check the broker API documentation
 
+	//https://www.openservicebrokerapi.org/
+
+	//https://github.com/openservicebrokerapi/servicebroker
+
+	//https://petstore.swagger.io/?url=https://raw.githubusercontent.com/openservicebrokerapi/servicebroker/v2.17/openapi.yaml
+
+	/*
+
+			GET /v2/service_instances/:instance_id HTTP/1.1
+			Host: <broker_url>
+			Authorization: Bearer <token>
+
+			{
+			  "service_id": "service-guid",
+			  "plan_id": "plan-guid",
+			  "dashboard_url": "https://service-dashboard.example.com"
+			}
+		--------------------------------------------------------------------------------
+			GET /v2/service_instances/:instance_id/service_bindings/:binding_id HTTP/1.1
+			Host: <broker_url>
+			Authorization: Bearer <token>
+
+			{
+				"credentials": {
+					"username": "user123",
+					"password": "pass123",
+					"url": "https://example-service.com"
+				}
+			}
+
+
+	*/
+
 	return nil
 }
 
