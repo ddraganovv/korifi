@@ -298,6 +298,15 @@ func (c *Client) Unbind(ctx context.Context, payload UnbindPayload) (UnbindRespo
 	return response, nil
 }
 
+func (c *Client) GetParameters(ctx context.Context) error {
+
+	// get parameters
+
+	// check the broker API documentation
+
+	return nil
+}
+
 func payloadToReader(payload any) (io.Reader, error) {
 	if payload == nil {
 		return nil, nil
