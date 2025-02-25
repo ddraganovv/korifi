@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"plugin"
+	"strings"
 	"time"
 
 	"code.cloudfoundry.org/korifi/api/actions"
@@ -495,6 +497,49 @@ func main() {
 			processStats,
 		))
 	}
+
+	// ###########################################################
+	// ################## PLUGIN HANDLERS  #######################
+
+	// go build -buildmode=plugin -o ./api/handlers/plugins/org_quotas.so ./api/handlers/plugins/org_quotas.go
+
+	const pluginsDir string = "/Users/C5382009/dev/korifi/open-source_korifi/korifi/api/handlers/plugins"
+
+	plugins, err := os.ReadDir(pluginsDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for _, file := range plugins {
+		if !strings.HasSuffix(file.Name(), ".so") {
+			continue
+		}
+
+		plugin, err := plugin.Open(pluginsDir + file.Name())
+		if err != nil {
+			log.Fatalf("plugin open: %s", err)
+		}
+
+		ctor, err := plugin.Lookup("NewPluginHandler")
+		if err != nil {
+			log.Fatalf("plugin Lookup: %s", err)
+		}
+
+		constructor, ok := ctor.(func(url.URL, handlers.RequestValidator) any)
+		if !ok {
+			log.Fatalf("constructor type assertion")
+		}
+		handlerObj := constructor(*serverURL, requestValidator)
+		handler, ok := handlerObj.(routing.Routable)
+		if !ok {
+			log.Fatalf("handler assertion")
+		}
+
+		apiHandlers = append(apiHandlers, handler)
+	}
+
+	// ###########################################################
+	// ###########################################################
 
 	for _, handler := range apiHandlers {
 		routerBuilder.LoadRoutes(handler)
